@@ -315,7 +315,7 @@ def unique_asset_path(dest_dir: Path, rel: str) -> Path:
     base, ext = os.path.splitext(safe_name)
     index = 1
     while True:
-        candidate = dest_dir / f"{base}__{index}{ext}"
+        candidate = dest_dir / f"{{base}}__{{index}}{{ext}}"
         if not candidate.exists():
             return candidate
         index += 1
@@ -400,12 +400,12 @@ def main() -> int:
     lines.append("<meta name=\\"viewport\\" content=\\"width=device-width,initial-scale=1\\">")
     lines.append(f"<title>{{html_escape(REPORT_TITLE)}}</title>")
     lines.append("<style>")
-    lines.append("body{font-family:Arial,Helvetica,sans-serif;margin:32px;color:#1f2933}")
-    lines.append("h1,h2{margin-bottom:8px}")
-    lines.append("p{max-width:960px;line-height:1.5}")
-    lines.append(".meta{color:#52606d;font-size:14px}")
-    lines.append("ul{padding-left:20px}")
-    lines.append("li{margin:4px 0}")
+    lines.append("body{{font-family:Arial,Helvetica,sans-serif;margin:32px;color:#1f2933}}")
+    lines.append("h1,h2{{margin-bottom:8px}}")
+    lines.append("p{{max-width:960px;line-height:1.5}}")
+    lines.append(".meta{{color:#52606d;font-size:14px}}")
+    lines.append("ul{{padding-left:20px}}")
+    lines.append("li{{margin:4px 0}}")
     lines.append("</style>")
     lines.append("</head>")
     lines.append("<body>")
