@@ -10,6 +10,7 @@ from fastapi import HTTPException, Request, Response, status
 
 from .settings import (
     AUTH_PASSWORD_HASH,
+    AUTH_IDENTIFIER_DOMAIN,
     BASIC_AUTH_PASS,
     BASIC_AUTH_USER,
     COOKIE_NAME,
@@ -57,9 +58,40 @@ def _verify_password(password: str) -> bool:
 
 
 def authenticate(username: str, password: str) -> bool:
-    username_ok = secrets.compare_digest(username, BASIC_AUTH_USER)
+    username_ok = False
+    normalized = normalize_identifier(username)
+    configured = normalize_identifier(BASIC_AUTH_USER)
+    for candidate in identifier_candidates(normalized):
+        if secrets.compare_digest(candidate, configured):
+            username_ok = True
+            break
     password_ok = _verify_password(password)
     return username_ok and password_ok
+
+
+def normalize_identifier(value: str) -> str:
+    return value.strip().lower()
+
+
+def identifier_candidates(identifier: str) -> list[str]:
+    value = normalize_identifier(identifier)
+    if not value:
+        return []
+    candidates = {value}
+    if "@" in value:
+        candidates.add(value.split("@", 1)[0])
+    elif AUTH_IDENTIFIER_DOMAIN:
+        candidates.add(f"{value}@{AUTH_IDENTIFIER_DOMAIN.lower()}")
+    return list(candidates)
+
+
+def canonical_identifier(identifier: str) -> str:
+    normalized = normalize_identifier(identifier)
+    configured = normalize_identifier(BASIC_AUTH_USER)
+    for candidate in identifier_candidates(normalized):
+        if secrets.compare_digest(candidate, configured):
+            return BASIC_AUTH_USER
+    return identifier.strip()
 
 
 def create_session(username: str) -> str:
@@ -83,6 +115,34 @@ def verify_session(token: str) -> Optional[str]:
     if payload.get("exp", 0) < int(time.time()):
         return None
     return payload.get("sub")
+
+
+def create_progress_token(run_id: int, ttl_hours: int) -> str:
+    exp = int(time.time()) + max(ttl_hours, 1) * 3600
+    payload = {"typ": "run_progress", "run_id": run_id, "exp": exp}
+    payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    signature = _sign(payload_bytes)
+    return f"{_b64url_encode(payload_bytes)}.{signature}"
+
+
+def verify_progress_token(token: str) -> Optional[dict]:
+    try:
+        payload_b64, signature = token.split(".", 1)
+        payload_bytes = _b64url_decode(payload_b64)
+        expected = _sign(payload_bytes)
+        if not secrets.compare_digest(signature, expected):
+            return None
+        payload = json.loads(payload_bytes.decode("utf-8"))
+    except Exception:
+        return None
+    if payload.get("typ") != "run_progress":
+        return None
+    if payload.get("exp", 0) < int(time.time()):
+        return None
+    run_id = payload.get("run_id")
+    if not isinstance(run_id, int):
+        return None
+    return payload
 
 
 def set_session_cookie(response: Response, token: str) -> None:

@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -131,6 +131,80 @@ class LoginRequest(BaseModel):
 class LoginResponse(BaseModel):
     username: str
     csrf_token: Optional[str] = None
+
+
+class ShareRunLinkRequest(BaseModel):
+    expires_hours: Optional[int] = Field(default=None, ge=1, le=24 * 30)
+
+
+class ShareRunLinkResponse(BaseModel):
+    run_id: int
+    token: str
+    url: str
+    expires_at: str
+
+
+class PublicRunProgressResponse(BaseModel):
+    id: int
+    run_name: str
+    status: str
+    stage: Optional[str] = None
+    job_id: Optional[str] = None
+    slurm_state: Optional[str] = None
+    slurm_reason: Optional[str] = None
+    slurm_exit_code: Optional[int] = None
+    slurm_exit_signal: Optional[int] = None
+    slurm_elapsed: Optional[str] = None
+    submitted_at: Optional[str] = None
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    message: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class UploadInitRequest(BaseModel):
+    dataset_id: str = Field(..., min_length=3, max_length=64)
+    file_role: Literal["staged", "metadata", "reference"]
+    file_name: str = Field(..., min_length=1, max_length=255)
+    total_size: int = Field(..., ge=0)
+    content_type: Optional[str] = None
+    expected_sha256: Optional[str] = Field(default=None, min_length=64, max_length=64)
+
+
+class UploadStatusResponse(BaseModel):
+    upload_id: str
+    dataset_id: str
+    file_role: str
+    file_name: str
+    total_size: int
+    received_bytes: int
+    completed: bool
+    final_path: Optional[str] = None
+    expected_sha256: Optional[str] = None
+    sha256: Optional[str] = None
+    checksum_valid: Optional[bool] = None
+    created_at: str
+    updated_at: str
+
+
+class UploadFinalizeDatasetRequest(BaseModel):
+    dataset_id: str = Field(..., min_length=3, max_length=64)
+    label: str = Field(..., min_length=1, max_length=128)
+    organ: str = Field(..., min_length=1, max_length=64)
+    platform: str = Field(..., min_length=1, max_length=64)
+    notes: Optional[str] = None
+    recommended_preset: Optional[str] = None
+    staged_upload_id: str = Field(..., min_length=8)
+    cell_metadata_upload_id: str = Field(..., min_length=8)
+    reference_upload_id: Optional[str] = None
+    public: bool = True
+
+
+class DatasetUpdateRequest(BaseModel):
+    label: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    notes: Optional[str] = Field(default=None, max_length=2048)
+    public: Optional[bool] = None
 
 
 class PreflightRequest(BaseModel):

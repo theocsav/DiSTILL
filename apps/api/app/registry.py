@@ -10,6 +10,11 @@ def _load_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _write_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+
 def list_datasets() -> List[Dict[str, Any]]:
     if not DATASETS_REGISTRY_PATH.exists():
         return []
@@ -21,11 +26,59 @@ def list_datasets() -> List[Dict[str, Any]]:
     return data
 
 
+def save_datasets(datasets: List[Dict[str, Any]]) -> None:
+    if DATASETS_REGISTRY_PATH.exists():
+        current = _load_json(DATASETS_REGISTRY_PATH)
+        if isinstance(current, dict):
+            current["datasets"] = datasets
+            _write_json(DATASETS_REGISTRY_PATH, current)
+            return
+    _write_json(DATASETS_REGISTRY_PATH, datasets)
+
+
 def get_dataset(dataset_id: str) -> Optional[Dict[str, Any]]:
     for dataset in list_datasets():
         if dataset.get("id") == dataset_id:
             return dataset
     return None
+
+
+def upsert_dataset(dataset: Dict[str, Any]) -> Dict[str, Any]:
+    dataset_id = dataset.get("id")
+    if not dataset_id:
+        raise ValueError("Dataset id is required.")
+    datasets = list_datasets()
+    replaced = False
+    for index, existing in enumerate(datasets):
+        if existing.get("id") == dataset_id:
+            datasets[index] = dataset
+            replaced = True
+            break
+    if not replaced:
+        datasets.append(dataset)
+    save_datasets(datasets)
+    return dataset
+
+
+def update_dataset(dataset_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    datasets = list_datasets()
+    for index, existing in enumerate(datasets):
+        if existing.get("id") == dataset_id:
+            merged = dict(existing)
+            merged.update(updates)
+            datasets[index] = merged
+            save_datasets(datasets)
+            return merged
+    return None
+
+
+def delete_dataset(dataset_id: str) -> bool:
+    datasets = list_datasets()
+    new_datasets = [item for item in datasets if item.get("id") != dataset_id]
+    if len(new_datasets) == len(datasets):
+        return False
+    save_datasets(new_datasets)
+    return True
 
 
 def list_presets() -> List[Dict[str, Any]]:

@@ -1,5 +1,7 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  createShareLink,
   createRun,
   dryRun,
   fetchDatasets,
@@ -108,6 +110,7 @@ export default function Home() {
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
   const [rerunLoadingId, setRerunLoadingId] = useState<number | null>(null);
+  const [shareLoadingId, setShareLoadingId] = useState<number | null>(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [preflightResult, setPreflightResult] = useState<PreflightResult | null>(null);
   const [dryRunLoading, setDryRunLoading] = useState(false);
@@ -148,7 +151,7 @@ export default function Home() {
     fetchPresets()
       .then((data) => setPresets(data))
       .catch((error) => setStatus(error instanceof Error ? error.message : String(error)));
-  }, [currentUser]);
+  }, [currentUser, refreshRuns]);
 
   useEffect(() => {
     if (!currentUser || !selectedPresetId) {
@@ -198,14 +201,14 @@ export default function Home() {
     setDryRunResult(null);
   }, [selectedDatasetId, mode, nComponents, kMin, kMax, runType]);
 
-  async function refreshRuns() {
+  const refreshRuns = useCallback(async () => {
     try {
       const data = await fetchRuns();
       setRuns(data);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     }
-  }
+  }, []);
 
   useEffect(() => {
     if (!currentUser || !autoRefreshRuns) {
@@ -418,6 +421,26 @@ export default function Home() {
     }
   }
 
+  async function handleShare(run: Run) {
+    if (!currentUser) {
+      setStatus("Sign in to create a share link.");
+      return;
+    }
+    setStatus("");
+    setShareLoadingId(run.id);
+    try {
+      const link = await createShareLink(run.id);
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(link.url);
+      }
+      setStatus(`Progress link copied: ${link.url}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setShareLoadingId(null);
+    }
+  }
+
   const datasetValidated = Boolean(preflightResult?.ok);
   const presetVersion = selectedPreset?.version || "not set";
   const sessionInitial = (currentUser?.[0] || "G").toUpperCase();
@@ -440,9 +463,9 @@ export default function Home() {
           ) : (
             <>
               <div className="muted">Sign in to create runs and preflight datasets.</div>
-              <a className="button-link" href="/login">
+              <Link className="button-link" href="/login">
                 Sign In
-              </a>
+              </Link>
             </>
           )}
         </div>
@@ -451,6 +474,11 @@ export default function Home() {
         <div className="hero-copy">
           <h1>DiSTILL</h1>
           <p>Disease Diagnosis from Spatial Transcriptomics via Interpretable Latent Learning</p>
+          <div className="inline-actions">
+            <Link className="button-link" href="/datasets/upload">
+              Public Dataset Upload
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -966,9 +994,17 @@ export default function Home() {
               <div>Created: {new Date(run.created_at).toLocaleString()}</div>
               <div>Output: {run.output_dir || "-"}</div>
               <div className="inline-actions">
-                <a className="link" href={`/runs/${run.id}`}>
+                <Link className="link" href={`/runs/${run.id}`}>
                   Logs
-                </a>
+                </Link>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => handleShare(run)}
+                  disabled={!currentUser || shareLoadingId === run.id}
+                >
+                  {shareLoadingId === run.id ? "Sharing..." : "Share Progress"}
+                </button>
                 <button
                   type="button"
                   className="ghost"
@@ -995,3 +1031,4 @@ export default function Home() {
     </main>
   );
 }
+

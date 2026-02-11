@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import Link from "next/link";
 import { useRouter } from "next/router";
 import { fetchMe, login } from "../lib/api";
 
@@ -40,6 +41,7 @@ export default function Login() {
           <h1>Sign in</h1>
           <p className="muted">
             Use your API credentials to create runs, preflight datasets, and view history.
+            Username or email-style identifiers are supported.
           </p>
 
           {status ? (
@@ -50,7 +52,7 @@ export default function Login() {
 
           <form className="auth-form" onSubmit={handleLogin}>
             <div>
-              <label>Username</label>
+              <label>Username or email</label>
               <input value={username} onChange={(event) => setUsername(event.target.value)} />
             </div>
             <div>
@@ -65,9 +67,9 @@ export default function Login() {
               <button type="submit" disabled={loading}>
                 {loading ? "Signing in..." : "Sign In"}
               </button>
-              <a className="link" href="/">
+              <Link className="link" href="/">
                 Back to overview
-              </a>
+              </Link>
             </div>
           </form>
         </section>

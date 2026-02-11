@@ -18,8 +18,10 @@ DB_PATH = os.environ.get("DB_PATH", str(REPO_ROOT / "runs.db"))
 BASIC_AUTH_USER = os.environ.get("BASIC_AUTH_USER", "admin")
 BASIC_AUTH_PASS = os.environ.get("BASIC_AUTH_PASS", "admin")
 AUTH_PASSWORD_HASH = os.environ.get("AUTH_PASSWORD_HASH")
+AUTH_IDENTIFIER_DOMAIN = os.environ.get("AUTH_IDENTIFIER_DOMAIN", "")
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "change-me")
 SESSION_TTL_MINUTES = int(os.environ.get("SESSION_TTL_MINUTES", "480"))
+PUBLIC_PROGRESS_TTL_HOURS = int(os.environ.get("PUBLIC_PROGRESS_TTL_HOURS", "168"))
 COOKIE_NAME = os.environ.get("COOKIE_NAME", "sptx_session")
 COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "false").lower() == "true"
 COOKIE_SAMESITE = os.environ.get("COOKIE_SAMESITE", "lax")
@@ -47,6 +49,19 @@ PREFLIGHT_SLURM_FALLBACK = os.environ.get("PREFLIGHT_SLURM_FALLBACK", "false").l
 PREFLIGHT_SLURM_TIMEOUT_SECONDS = int(os.environ.get("PREFLIGHT_SLURM_TIMEOUT_SECONDS", "600"))
 PREFLIGHT_SLURM_POLL_SECONDS = int(os.environ.get("PREFLIGHT_SLURM_POLL_SECONDS", "5"))
 PREFLIGHT_CACHE_TTL_SECONDS = int(os.environ.get("PREFLIGHT_CACHE_TTL_SECONDS", "300"))
+DATA_UPLOADS_DIR = Path(
+    os.environ.get("DATA_UPLOADS_DIR", str(RUNS_DIR / "public_uploads" / "datasets"))
+).resolve()
+UPLOAD_SESSION_TTL_HOURS = int(os.environ.get("UPLOAD_SESSION_TTL_HOURS", "72"))
+UPLOAD_CLEANUP_INTERVAL_SECONDS = int(os.environ.get("UPLOAD_CLEANUP_INTERVAL_SECONDS", "900"))
+UPLOAD_CLEANUP_ENABLED = os.environ.get("UPLOAD_CLEANUP_ENABLED", "true").lower() == "true"
+UPLOAD_MAX_CONCURRENT_PER_USER = int(os.environ.get("UPLOAD_MAX_CONCURRENT_PER_USER", "6"))
+UPLOAD_MAX_SIZE_STAGED_GB = float(os.environ.get("UPLOAD_MAX_SIZE_STAGED_GB", "100"))
+UPLOAD_MAX_SIZE_METADATA_GB = float(os.environ.get("UPLOAD_MAX_SIZE_METADATA_GB", "5"))
+UPLOAD_MAX_SIZE_REFERENCE_GB = float(os.environ.get("UPLOAD_MAX_SIZE_REFERENCE_GB", "50"))
+UPLOAD_ALLOWED_EXT_STAGED = os.environ.get("UPLOAD_ALLOWED_EXT_STAGED", ".h5ad")
+UPLOAD_ALLOWED_EXT_METADATA = os.environ.get("UPLOAD_ALLOWED_EXT_METADATA", ".csv,.tsv,.gz")
+UPLOAD_ALLOWED_EXT_REFERENCE = os.environ.get("UPLOAD_ALLOWED_EXT_REFERENCE", ".h5ad")
 
 
 def validate_settings() -> None:
@@ -63,7 +78,18 @@ def validate_settings() -> None:
         raise RuntimeError("ARTIFACT_ROOTS must include at least one path.")
     if not RUNS_DIR.is_absolute():
         raise RuntimeError("RUNS_DIR must be an absolute path.")
+    if not DATA_UPLOADS_DIR.is_absolute():
+        raise RuntimeError("DATA_UPLOADS_DIR must be an absolute path.")
+    if UPLOAD_SESSION_TTL_HOURS <= 0:
+        raise RuntimeError("UPLOAD_SESSION_TTL_HOURS must be > 0.")
+    if UPLOAD_CLEANUP_INTERVAL_SECONDS <= 0:
+        raise RuntimeError("UPLOAD_CLEANUP_INTERVAL_SECONDS must be > 0.")
+    if UPLOAD_MAX_CONCURRENT_PER_USER <= 0:
+        raise RuntimeError("UPLOAD_MAX_CONCURRENT_PER_USER must be > 0.")
+    if min(UPLOAD_MAX_SIZE_STAGED_GB, UPLOAD_MAX_SIZE_METADATA_GB, UPLOAD_MAX_SIZE_REFERENCE_GB) <= 0:
+        raise RuntimeError("Upload max size limits must be > 0.")
     for root in ARTIFACT_ROOTS:
         if not root.is_absolute():
             raise RuntimeError("ARTIFACT_ROOTS must contain absolute paths.")
     enforce_allowed_path(RUNS_DIR, ARTIFACT_ROOTS)
+    enforce_allowed_path(DATA_UPLOADS_DIR, ARTIFACT_ROOTS)

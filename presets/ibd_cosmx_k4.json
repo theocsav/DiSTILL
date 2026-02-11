@@ -23,15 +23,15 @@
   "report_title": "NicheRunner Paper Run",
   "run_dir": "runs/ibd_cosmx_k4",
   "preflight_slurm": {
-    "time": "00:10:00",
+    "time": "0-00:10:00",
     "mem": "8gb",
     "cpus_per_task": 2
   },
   "default_resources": {
-    "time": "96h",
-    "cpus_per_task": 8,
-    "mem": "400gb",
-    "qos": "standard"
+    "time": "72:00:00",
+    "cpus_per_task": 32,
+    "mem": "500gb",
+    "qos": "kejun.huang-b"
   },
   "default_params": {
     "mode": "fixed_k",
@@ -40,11 +40,12 @@
   "slurm": {
     "enabled": true,
     "job_name": "cell2location_IBD_3000_NMF-k4_500samples",
-    "time": "96h",
-    "mem": "400gb",
-    "cpus_per_task": 8,
-    "qos": "standard",
-    "mail_user": "you@example.edu",
+    "account": "kejun.huang",
+    "time": "72:00:00",
+    "mem": "500gb",
+    "cpus_per_task": 32,
+    "qos": "kejun.huang-b",
+    "mail_user": "vasco.hinostroza@ufl.edu",
     "mail_type": "ALL",
     "conda_env": "/blue/kejun.huang/vasco.hinostroza/nicherunner/conda/envs/ibd_cosmx_k4"
   }

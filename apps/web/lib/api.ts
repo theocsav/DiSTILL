@@ -111,6 +111,39 @@ export type Dataset = {
   schema_manifest?: Record<string, unknown>;
   metadata_columns?: string[];
   notes?: string;
+  public?: boolean;
+  uploaded_by?: string;
+  uploaded_at?: string;
+  source?: string;
+  updated_by?: string;
+  updated_at?: string;
+  checksums?: Record<string, string | null>;
+};
+
+export type ShareRunLink = {
+  run_id: number;
+  token: string;
+  url: string;
+  expires_at: string;
+};
+
+export type PublicRunProgress = {
+  id: number;
+  run_name: string;
+  status: string;
+  stage?: string | null;
+  job_id?: string | null;
+  slurm_state?: string | null;
+  slurm_reason?: string | null;
+  slurm_exit_code?: number | null;
+  slurm_exit_signal?: number | null;
+  slurm_elapsed?: string | null;
+  submitted_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  message?: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type PreflightPayload = {
@@ -176,10 +209,12 @@ function setCsrfToken(token?: string) {
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method || "GET").toUpperCase();
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(init?.headers || {}),
-  };
+  const providedHeaders = (init?.headers || {}) as Record<string, string>;
+  const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
+  const headers: Record<string, string> = { ...providedHeaders };
+  if (!isFormData && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
   if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
     const token = getCsrfToken();
     if (token) {
@@ -239,6 +274,10 @@ export async function fetchDatasets(params?: {
   return apiFetch<Dataset[]>(`/datasets${suffix}`);
 }
 
+export async function fetchPublicDatasets() {
+  return apiFetch<Dataset[]>("/datasets/public");
+}
+
 export async function createRun(payload: RunCreatePayload) {
   return apiFetch<Run>("/runs", {
     method: "POST",
@@ -287,6 +326,148 @@ export function artifactUrl(runId: number, path: string) {
 
 export async function cancelRun(runId: number) {
   return apiFetch<{ status: string }>(`/runs/${runId}/cancel`, { method: "POST" });
+}
+
+export async function createShareLink(runId: number, expiresHours?: number) {
+  return apiFetch<ShareRunLink>(`/runs/${runId}/share`, {
+    method: "POST",
+    body: JSON.stringify({ expires_hours: expiresHours }),
+  });
+}
+
+export async function fetchPublicRunProgress(token: string) {
+  return apiFetch<PublicRunProgress>(`/public/runs/progress?token=${encodeURIComponent(token)}`);
+}
+
+export type DatasetUploadPayload = {
+  dataset_id: string;
+  label: string;
+  organ: string;
+  platform: string;
+  notes?: string;
+  recommended_preset?: string;
+  staged_file: File;
+  cell_metadata_file: File;
+  reference_file?: File;
+};
+
+export async function uploadDataset(payload: DatasetUploadPayload) {
+  const body = new FormData();
+  body.append("dataset_id", payload.dataset_id);
+  body.append("label", payload.label);
+  body.append("organ", payload.organ);
+  body.append("platform", payload.platform);
+  if (payload.notes) {
+    body.append("notes", payload.notes);
+  }
+  if (payload.recommended_preset) {
+    body.append("recommended_preset", payload.recommended_preset);
+  }
+  body.append("staged_file", payload.staged_file);
+  body.append("cell_metadata_file", payload.cell_metadata_file);
+  if (payload.reference_file) {
+    body.append("reference_file", payload.reference_file);
+  }
+  return apiFetch<{ ok: boolean; dataset: Dataset }>("/datasets/upload", {
+    method: "POST",
+    body,
+  });
+}
+
+export type UploadInitPayload = {
+  dataset_id: string;
+  file_role: "staged" | "metadata" | "reference";
+  file_name: string;
+  total_size: number;
+  content_type?: string;
+};
+
+export type UploadSession = {
+  upload_id: string;
+  dataset_id: string;
+  file_role: string;
+  file_name: string;
+  total_size: number;
+  received_bytes: number;
+  completed: boolean;
+  final_path?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export async function initUploadSession(payload: UploadInitPayload) {
+  return apiFetch<UploadSession>("/uploads/init", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchUploadStatus(uploadId: string) {
+  return apiFetch<UploadSession>(`/uploads/${encodeURIComponent(uploadId)}/status`);
+}
+
+export async function uploadChunk(uploadId: string, offset: number, chunk: Blob) {
+  const headers: Record<string, string> = {};
+  const token = getCsrfToken();
+  if (token) {
+    headers[CSRF_HEADER_NAME] = token;
+  }
+  const response = await fetch(
+    `${API_BASE}/uploads/${encodeURIComponent(uploadId)}/chunk?offset=${offset}`,
+    {
+      method: "PUT",
+      credentials: "include",
+      headers,
+      body: chunk,
+    }
+  );
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Chunk upload failed: ${response.status}`);
+  }
+  return (await response.json()) as UploadSession;
+}
+
+export async function completeUploadSession(uploadId: string) {
+  return apiFetch<UploadSession>(`/uploads/${encodeURIComponent(uploadId)}/complete`, {
+    method: "POST",
+  });
+}
+
+export type FinalizeDatasetUploadPayload = {
+  dataset_id: string;
+  label: string;
+  organ: string;
+  platform: string;
+  notes?: string;
+  recommended_preset?: string;
+  staged_upload_id: string;
+  cell_metadata_upload_id: string;
+  reference_upload_id?: string;
+  public?: boolean;
+};
+
+export async function finalizeDatasetUpload(payload: FinalizeDatasetUploadPayload) {
+  return apiFetch<{ ok: boolean; dataset: Dataset }>("/datasets/upload/finalize", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateDataset(datasetId: string, payload: { label?: string; notes?: string; public?: boolean }) {
+  return apiFetch<{ ok: boolean; dataset: Dataset }>(`/datasets/${encodeURIComponent(datasetId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteDataset(datasetId: string) {
+  return apiFetch<{ ok: boolean; deleted_id: string; deleted_by: string }>(
+    `/datasets/${encodeURIComponent(datasetId)}`,
+    {
+      method: "DELETE",
+    }
+  );
 }
 
 export async function login(username: string, password: string) {

@@ -1,41 +1,70 @@
 import json
+import logging
+import re
 import shutil
 import subprocess
 import sys
 import threading
+import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from .auth import (
     authenticate,
+    canonical_identifier,
     clear_session_cookie,
     create_session,
+    create_progress_token,
     ensure_csrf_cookie,
     require_csrf,
     require_session,
     set_session_cookie,
+    verify_progress_token,
 )
 from .db import create_run, enqueue_run, fetch_run, init_db, list_runs, update_run
 from .preflight_cache import build_cache_key, get_cached_join_result, set_cached_join_result
-from .registry import dataset_manifest_hash, get_dataset, list_datasets, list_presets
+from .registry import (
+    dataset_manifest_hash,
+    delete_dataset,
+    get_dataset,
+    list_datasets,
+    list_presets,
+    update_dataset,
+    upsert_dataset,
+)
 from .runner import apply_dataset_registry, load_preset, prepare_run, resolve_run_paths, PIPELINE_RUNNER
 from .schemas import (
     DryRunRequest,
+    DatasetUpdateRequest,
     DryRunResponse,
     LoginRequest,
     LoginResponse,
+    PublicRunProgressResponse,
     PreflightRequest,
     PreflightResponse,
     RunCreate,
     RunRerun,
     RunResponse,
+    ShareRunLinkRequest,
+    ShareRunLinkResponse,
+    UploadFinalizeDatasetRequest,
+    UploadInitRequest,
+    UploadStatusResponse,
 )
 from .preflight_runner import run_slurm_preflight
+from .upload_store import (
+    append_chunk,
+    cleanup_stale_uploads,
+    complete_upload,
+    get_status as get_upload_status,
+    init_upload,
+)
 from .settings import (
     ALLOWED_ORIGINS,
     ARTIFACT_ROOTS,
@@ -44,7 +73,12 @@ from .settings import (
     RUNS_DIR,
     DISK_WARN_FREE_GB,
     DISK_WARN_PERCENT,
+    DATA_UPLOADS_DIR,
     RUN_RETENTION_DAYS,
+    PUBLIC_PROGRESS_TTL_HOURS,
+    UPLOAD_CLEANUP_ENABLED,
+    UPLOAD_CLEANUP_INTERVAL_SECONDS,
+    UPLOAD_SESSION_TTL_HOURS,
     PREFLIGHT_SLURM_FALLBACK,
     PREFLIGHT_CACHE_TTL_SECONDS,
     WORKER_ENABLED,
@@ -56,6 +90,19 @@ from .worker import loop as worker_loop
 from .storage import enforce_allowed_path, list_artifacts, safe_join
 from .validation import validate_config
 
+logger = logging.getLogger(__name__)
+
+
+def upload_cleanup_loop() -> None:
+    while True:
+        try:
+            result = cleanup_stale_uploads(UPLOAD_SESSION_TTL_HOURS)
+            if result.get("removed_sessions", 0) > 0:
+                logger.info("Upload cleanup removed %s stale sessions", result["removed_sessions"])
+        except Exception as exc:
+            logger.exception("Upload cleanup loop failed: %s", exc)
+        time.sleep(UPLOAD_CLEANUP_INTERVAL_SECONDS)
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -65,6 +112,9 @@ async def lifespan(_app: FastAPI):
     if WORKER_ENABLED:
         thread = threading.Thread(target=worker_loop, daemon=True)
         thread.start()
+    if UPLOAD_CLEANUP_ENABLED:
+        cleanup_thread = threading.Thread(target=upload_cleanup_loop, daemon=True)
+        cleanup_thread.start()
     yield
 
 
@@ -99,12 +149,13 @@ def hpg_health() -> dict:
 
 @app.post("/auth/login", response_model=LoginResponse)
 def login(payload: LoginRequest, request: Request, response: Response) -> dict:
-    if not authenticate(payload.username, payload.password):
+    identifier = canonical_identifier(payload.username)
+    if not authenticate(identifier, payload.password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = create_session(payload.username)
+    token = create_session(identifier)
     set_session_cookie(response, token)
     csrf_token = ensure_csrf_cookie(request, response, rotate=True)
-    return {"username": payload.username, "csrf_token": csrf_token}
+    return {"username": identifier, "csrf_token": csrf_token}
 
 
 @app.post("/auth/logout", dependencies=[Depends(require_session), Depends(require_csrf)])
@@ -152,6 +203,235 @@ def get_datasets(
     return datasets
 
 
+@app.get("/datasets/public")
+def get_public_datasets() -> list[dict]:
+    datasets = list_datasets()
+    return [item for item in datasets if bool(item.get("public"))]
+
+
+@app.patch(
+    "/datasets/{dataset_id}",
+    dependencies=[Depends(require_session), Depends(require_csrf)],
+)
+def patch_dataset(
+    dataset_id: str,
+    payload: DatasetUpdateRequest,
+    username: str = Depends(require_session),
+) -> dict:
+    existing = get_dataset(dataset_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    updates = payload.model_dump(exclude_none=True)
+    updates["updated_by"] = username
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    updated = update_dataset(dataset_id, updates)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    return {"ok": True, "dataset": updated}
+
+
+@app.delete(
+    "/datasets/{dataset_id}",
+    dependencies=[Depends(require_session), Depends(require_csrf)],
+)
+def remove_dataset(dataset_id: str, username: str = Depends(require_session)) -> dict:
+    existing = get_dataset(dataset_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    deleted = delete_dataset(dataset_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    return {"ok": True, "deleted_id": dataset_id, "deleted_by": username}
+
+
+@app.post(
+    "/uploads/init",
+    response_model=UploadStatusResponse,
+    dependencies=[Depends(require_session), Depends(require_csrf)],
+)
+def init_upload_endpoint(payload: UploadInitRequest, username: str = Depends(require_session)) -> dict:
+    try:
+        return init_upload(
+            username=username,
+            dataset_id=payload.dataset_id,
+            file_role=payload.file_role,
+            file_name=payload.file_name,
+            total_size=payload.total_size,
+            content_type=payload.content_type,
+            expected_sha256=payload.expected_sha256,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/uploads/{upload_id}/status", response_model=UploadStatusResponse, dependencies=[Depends(require_session)])
+def upload_status_endpoint(upload_id: str, username: str = Depends(require_session)) -> dict:
+    try:
+        return get_upload_status(upload_id, username)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.put(
+    "/uploads/{upload_id}/chunk",
+    response_model=UploadStatusResponse,
+    dependencies=[Depends(require_session), Depends(require_csrf)],
+)
+async def upload_chunk_endpoint(
+    upload_id: str,
+    request: Request,
+    offset: int = Query(..., ge=0),
+    username: str = Depends(require_session),
+) -> dict:
+    data = await request.body()
+    try:
+        return append_chunk(upload_id, username, offset, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post(
+    "/uploads/{upload_id}/complete",
+    response_model=UploadStatusResponse,
+    dependencies=[Depends(require_session), Depends(require_csrf)],
+)
+def complete_upload_endpoint(upload_id: str, username: str = Depends(require_session)) -> dict:
+    try:
+        return complete_upload(upload_id, username)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/datasets/upload", dependencies=[Depends(require_csrf)])
+async def upload_dataset(
+    username: str = Depends(require_session),
+    dataset_id: str = Form(...),
+    label: str = Form(...),
+    organ: str = Form(...),
+    platform: str = Form(...),
+    notes: str = Form(default=""),
+    recommended_preset: str = Form(default=""),
+    staged_file: UploadFile = File(...),
+    cell_metadata_file: UploadFile = File(...),
+    reference_file: UploadFile | None = File(default=None),
+) -> dict:
+    safe_id = dataset_id.strip().lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{2,63}", safe_id):
+        raise HTTPException(
+            status_code=400,
+            detail="dataset_id must match [a-z0-9][a-z0-9._-]{2,63}",
+        )
+    safe_user = re.sub(r"[^a-z0-9._-]+", "_", username.strip().lower()).strip("._-")
+    if not safe_user:
+        raise HTTPException(status_code=400, detail="Invalid authenticated username for upload path.")
+
+    base_dir = (DATA_UPLOADS_DIR / safe_user / safe_id).resolve()
+    enforce_allowed_path(base_dir, ARTIFACT_ROOTS)
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    async def _save(upload: UploadFile, target_name: str | None = None) -> str:
+        file_name = Path(target_name or upload.filename or "upload.bin").name
+        destination = (base_dir / file_name).resolve()
+        enforce_allowed_path(destination, ARTIFACT_ROOTS)
+        with destination.open("wb") as handle:
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                handle.write(chunk)
+        await upload.close()
+        return str(destination)
+
+    staged_path = await _save(staged_file)
+    metadata_path = await _save(cell_metadata_file)
+    reference_path = await _save(reference_file) if reference_file else ""
+
+    dataset = {
+        "id": safe_id,
+        "label": label.strip() or safe_id,
+        "organ": organ.strip(),
+        "platform": platform.strip(),
+        "staged_path": staged_path,
+        "cell_metadata_path": metadata_path,
+        "reference_h5ad_path": reference_path or None,
+        "recommended_preset": recommended_preset.strip() or None,
+        "notes": notes.strip() or None,
+        "public": True,
+        "uploaded_by": username,
+        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+        "updated_by": username,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "web_upload",
+        "upload_root": str(base_dir),
+        "checksums": {},
+    }
+    upsert_dataset(dataset)
+    return {"ok": True, "dataset": dataset}
+
+
+@app.post(
+    "/datasets/upload/finalize",
+    dependencies=[Depends(require_session), Depends(require_csrf)],
+)
+def finalize_uploaded_dataset(
+    payload: UploadFinalizeDatasetRequest,
+    username: str = Depends(require_session),
+) -> dict:
+    try:
+        staged = get_upload_status(payload.staged_upload_id, username)
+        metadata = get_upload_status(payload.cell_metadata_upload_id, username)
+        reference = (
+            get_upload_status(payload.reference_upload_id, username) if payload.reference_upload_id else None
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    uploads = [staged, metadata] + ([reference] if reference else [])
+    for item in uploads:
+        if not item:
+            continue
+        if not item.get("completed"):
+            raise HTTPException(status_code=400, detail=f"Upload not complete: {item.get('upload_id')}")
+        if item.get("dataset_id") != payload.dataset_id.strip().lower():
+            raise HTTPException(status_code=400, detail=f"Dataset mismatch in upload: {item.get('upload_id')}")
+
+    if staged.get("file_role") != "staged":
+        raise HTTPException(status_code=400, detail="staged_upload_id must reference role 'staged'.")
+    if metadata.get("file_role") != "metadata":
+        raise HTTPException(status_code=400, detail="cell_metadata_upload_id must reference role 'metadata'.")
+    if reference and reference.get("file_role") != "reference":
+        raise HTTPException(status_code=400, detail="reference_upload_id must reference role 'reference'.")
+
+    upload_root = str(Path(staged["final_path"]).resolve().parent)
+    dataset_checksums = {
+        "staged": staged.get("sha256"),
+        "metadata": metadata.get("sha256"),
+    }
+    if reference:
+        dataset_checksums["reference"] = reference.get("sha256")
+    dataset = {
+        "id": payload.dataset_id.strip().lower(),
+        "label": payload.label.strip(),
+        "organ": payload.organ.strip(),
+        "platform": payload.platform.strip(),
+        "staged_path": staged["final_path"],
+        "cell_metadata_path": metadata["final_path"],
+        "reference_h5ad_path": reference["final_path"] if reference else None,
+        "recommended_preset": payload.recommended_preset.strip() if payload.recommended_preset else None,
+        "notes": payload.notes.strip() if payload.notes else None,
+        "public": payload.public,
+        "uploaded_by": username,
+        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+        "updated_by": username,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "chunked_upload",
+        "upload_root": upload_root,
+        "checksums": dataset_checksums,
+    }
+    upsert_dataset(dataset)
+    return {"ok": True, "dataset": dataset}
+
+
 @app.get("/presets", dependencies=[Depends(require_session)])
 def get_presets(
     organ: Optional[str] = Query(default=None),
@@ -176,6 +456,60 @@ def get_run(run_id: int) -> dict:
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
     return run
+
+
+@app.post(
+    "/runs/{run_id}/share",
+    response_model=ShareRunLinkResponse,
+    dependencies=[Depends(require_session), Depends(require_csrf)],
+)
+def create_share_link(
+    run_id: int,
+    payload: ShareRunLinkRequest,
+    request: Request,
+) -> dict:
+    run = fetch_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    ttl_hours = payload.expires_hours or PUBLIC_PROGRESS_TTL_HOURS
+    token = create_progress_token(run_id, ttl_hours)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
+    origin = str(request.base_url).rstrip("/")
+    return {
+        "run_id": run_id,
+        "token": token,
+        "url": f"{origin}/progress/{token}",
+        "expires_at": expires_at.isoformat(),
+    }
+
+
+@app.get("/public/runs/progress", response_model=PublicRunProgressResponse)
+def public_run_progress(token: str = Query(..., min_length=16)) -> dict:
+    payload = verify_progress_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    run = fetch_run(int(payload["run_id"]))
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    fields = (
+        "id",
+        "run_name",
+        "status",
+        "stage",
+        "job_id",
+        "slurm_state",
+        "slurm_reason",
+        "slurm_exit_code",
+        "slurm_exit_signal",
+        "slurm_elapsed",
+        "submitted_at",
+        "started_at",
+        "finished_at",
+        "message",
+        "created_at",
+        "updated_at",
+    )
+    return {key: run.get(key) for key in fields}
 
 
 def _validate_config_payload(
