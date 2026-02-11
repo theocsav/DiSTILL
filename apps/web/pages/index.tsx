@@ -449,11 +449,8 @@ export default function Home() {
       </details>
       <header className="hero">
         <div className="hero-copy">
-          <h1>NicheRunner</h1>
-          <p>
-            Build reproducible spatial analysis runs with preset-driven configuration, dataset
-            registries, and structured preflight checks.
-          </p>
+          <h1>DiSTILL</h1>
+          <p>Disease Diagnosis from Spatial Transcriptomics via Interpretable Latent Learning</p>
         </div>
       </header>
 

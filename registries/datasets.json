@@ -4,8 +4,8 @@
     "label": "IBD CosMx Sample A",
     "organ": "colon",
     "platform": "cosmx",
-    "staged_path": "/path/to/GSE234713_CosMx_combined.h5ad",
-    "cell_metadata_path": "/path/to/GSE234713_CosMx_cell_metadata.csv.gz",
+    "staged_path": "/orange/kejun.huang/vasco.hinostroza/data/ibd/cosmx.h5ad",
+    "cell_metadata_path": "/orange/kejun.huang/vasco.hinostroza/data/ibd/cell_metadata.csv",
     "recommended_preset": "ibd_cosmx_k4",
     "schema_manifest": {
       "obs_keys": ["fov", "cell_ID", "patient", "disease_status"],

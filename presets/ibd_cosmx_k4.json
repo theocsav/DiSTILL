@@ -6,11 +6,11 @@
   "run_name": "ibd_cosmx_k4",
   "mode": "fixed_k",
   "template_path": "pipeline_assets/scripts/IBD_3000epochs_500samples_NMF-k4.py",
-  "reference_h5ad_path": "/path/to/reference.h5ad",
-  "cosmx_h5ad_path": "/path/to/spatial.h5ad",
-  "cell_metadata_path": "/path/to/cell_metadata.csv.gz",
-  "output_dir": "/path/to/output_dir",
-  "ref_model_dir": "/path/to/cell2location_models",
+  "reference_h5ad_path": "/orange/kejun.huang/vasco.hinostroza/data/ibd/reference.h5ad",
+  "cosmx_h5ad_path": "/orange/kejun.huang/vasco.hinostroza/data/ibd/cosmx.h5ad",
+  "cell_metadata_path": "/orange/kejun.huang/vasco.hinostroza/data/ibd/cell_metadata.csv",
+  "output_dir": "/blue/kejun.huang/vasco.hinostroza/nicherunner/runs/ibd_cosmx_k4/output",
+  "ref_model_dir": "/blue/kejun.huang/vasco.hinostroza/nicherunner/runs/ibd_cosmx_k4/ref_model",
   "ref_model_name": "cell2location_reference_model_k4",
   "inf_aver_name": "inf_aver_k4.csv",
   "n_components": 4,
@@ -46,6 +46,6 @@
     "qos": "standard",
     "mail_user": "you@example.edu",
     "mail_type": "ALL",
-    "conda_env": "/path/to/conda/env"
+    "conda_env": "/blue/kejun.huang/vasco.hinostroza/nicherunner/conda/envs/ibd_cosmx_k4"
   }
 }

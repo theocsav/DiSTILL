@@ -225,3 +225,9 @@ hash_b64 = base64.urlsafe_b64encode(dk).decode("ascii").rstrip("=")
 print(f"pbkdf2_sha256${iterations}${salt}${hash_b64}")
 PY
 ```
+
+## Roadmap
+
+- Add a shareable progress link so users can track the status of submitted work.
+- Add a public data upload interface where uploaded datasets are visible to all users.
+- Support an alternate login identifier format (for example, username-based login instead of email format).
