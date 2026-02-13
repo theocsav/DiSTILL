@@ -14,6 +14,9 @@ PRESETS_DIR = Path(os.environ.get("PRESETS_DIR", str(REPO_ROOT / "presets"))).re
 DATASETS_REGISTRY_PATH = Path(
     os.environ.get("DATASETS_REGISTRY_PATH", str(REPO_ROOT / "registries" / "datasets.json"))
 ).resolve()
+USERS_REGISTRY_PATH = Path(
+    os.environ.get("USERS_REGISTRY_PATH", str(REPO_ROOT / "registries" / "users.json"))
+).resolve()
 DB_PATH = os.environ.get("DB_PATH", str(REPO_ROOT / "runs.db"))
 BASIC_AUTH_USER = os.environ.get("BASIC_AUTH_USER", "admin")
 BASIC_AUTH_PASS = os.environ.get("BASIC_AUTH_PASS", "admin")

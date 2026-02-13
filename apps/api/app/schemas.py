@@ -133,6 +133,17 @@ class LoginResponse(BaseModel):
     csrf_token: Optional[str] = None
 
 
+class UserCreateRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=320)
+    password: str = Field(..., min_length=8, max_length=256)
+
+
+class UserCreateResponse(BaseModel):
+    username: str
+    created_by: str
+    created_at: str
+
+
 class ShareRunLinkRequest(BaseModel):
     expires_hours: Optional[int] = Field(default=None, ge=1, le=24 * 30)
 

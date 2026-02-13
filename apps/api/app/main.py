@@ -19,6 +19,7 @@ from .auth import (
     authenticate,
     canonical_identifier,
     clear_session_cookie,
+    create_user,
     create_session,
     create_progress_token,
     ensure_csrf_cookie,
@@ -45,6 +46,8 @@ from .schemas import (
     DryRunResponse,
     LoginRequest,
     LoginResponse,
+    UserCreateRequest,
+    UserCreateResponse,
     PublicRunProgressResponse,
     PreflightRequest,
     PreflightResponse,
@@ -174,6 +177,18 @@ def whoami(request: Request, response: Response, username: str = Depends(require
 def csrf_token(request: Request, response: Response) -> dict:
     csrf_token_value = ensure_csrf_cookie(request, response)
     return {"csrf_token": csrf_token_value}
+
+
+@app.post(
+    "/auth/users",
+    response_model=UserCreateResponse,
+    dependencies=[Depends(require_session), Depends(require_csrf)],
+)
+def create_auth_user(payload: UserCreateRequest, username: str = Depends(require_session)) -> dict:
+    try:
+        return create_user(payload.username, payload.password, username)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/datasets", dependencies=[Depends(require_session)])

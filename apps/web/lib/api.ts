@@ -146,6 +146,17 @@ export type PublicRunProgress = {
   updated_at: string;
 };
 
+export type CreateUserPayload = {
+  username: string;
+  password: string;
+};
+
+export type CreateUserResponse = {
+  username: string;
+  created_by: string;
+  created_at: string;
+};
+
 export type PreflightPayload = {
   preset_path?: string;
   config?: Record<string, unknown>;
@@ -489,4 +500,11 @@ export async function fetchMe() {
   const data = await apiFetch<{ username: string; csrf_token?: string }>("/auth/me");
   setCsrfToken(data.csrf_token);
   return data;
+}
+
+export async function createUser(payload: CreateUserPayload) {
+  return apiFetch<CreateUserResponse>("/auth/users", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }

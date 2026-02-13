@@ -137,6 +137,15 @@ export default function Home() {
     return DEFAULT_PAPER_STAGES;
   }, [runType, selectedPreset]);
 
+  const refreshRuns = useCallback(async () => {
+    try {
+      const data = await fetchRuns();
+      setRuns(data);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+
   useEffect(() => {
     fetchMe()
       .then((data) => setCurrentUser(data.username))
@@ -200,15 +209,6 @@ export default function Home() {
     setPreflightResult(null);
     setDryRunResult(null);
   }, [selectedDatasetId, mode, nComponents, kMin, kMax, runType]);
-
-  const refreshRuns = useCallback(async () => {
-    try {
-      const data = await fetchRuns();
-      setRuns(data);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
-    }
-  }, []);
 
   useEffect(() => {
     if (!currentUser || !autoRefreshRuns) {
@@ -456,6 +456,9 @@ export default function Home() {
           {currentUser ? (
             <>
               <div className="muted">Signed in as {currentUser}</div>
+              <Link className="link" href="/users/create">
+                Create User
+              </Link>
               <button type="button" className="ghost" onClick={handleLogout}>
                 Sign Out
               </button>

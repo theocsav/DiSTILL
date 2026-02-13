@@ -2,8 +2,11 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from fastapi import HTTPException, Request, Response, status
@@ -18,6 +21,7 @@ from .settings import (
     COOKIE_SECURE,
     CSRF_COOKIE_NAME,
     CSRF_HEADER_NAME,
+    USERS_REGISTRY_PATH,
     SESSION_SECRET,
     SESSION_TTL_MINUTES,
 )
@@ -42,22 +46,72 @@ def _hash_password(password: str, salt: str, iterations: int) -> str:
     return _b64url_encode(dk)
 
 
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _load_users() -> list[dict]:
+    path = Path(USERS_REGISTRY_PATH)
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if isinstance(data, dict):
+        users = data.get("users", [])
+        return users if isinstance(users, list) else []
+    if isinstance(data, list):
+        return data
+    return []
+
+
+def _save_users(users: list[dict]) -> None:
+    payload = {"users": users}
+    USERS_REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    USERS_REGISTRY_PATH.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _verify_password_hash(password: str, encoded_hash: str) -> bool:
+    # Format: pbkdf2_sha256$iterations$salt$hash
+    try:
+        algo, iterations_str, salt, stored = encoded_hash.split("$", 3)
+        if algo != "pbkdf2_sha256":
+            return False
+        iterations = int(iterations_str)
+    except ValueError:
+        return False
+    computed = _hash_password(password, salt, iterations)
+    return secrets.compare_digest(computed, stored)
+
+
 def _verify_password(password: str) -> bool:
     if AUTH_PASSWORD_HASH:
-        # Format: pbkdf2_sha256$iterations$salt$hash
-        try:
-            algo, iterations_str, salt, stored = AUTH_PASSWORD_HASH.split("$", 3)
-            if algo != "pbkdf2_sha256":
-                return False
-            iterations = int(iterations_str)
-        except ValueError:
-            return False
-        computed = _hash_password(password, salt, iterations)
-        return secrets.compare_digest(computed, stored)
+        return _verify_password_hash(password, AUTH_PASSWORD_HASH)
     return secrets.compare_digest(password, BASIC_AUTH_PASS)
 
 
+def _find_registry_user(identifier: str) -> Optional[dict]:
+    normalized = normalize_identifier(identifier)
+    target_candidates = set(identifier_candidates(normalized))
+    if not target_candidates:
+        return None
+    for user in _load_users():
+        username = user.get("username")
+        password_hash = user.get("password_hash")
+        if not isinstance(username, str) or not isinstance(password_hash, str):
+            continue
+        user_candidates = set(identifier_candidates(username))
+        if target_candidates & user_candidates:
+            return user
+    return None
+
+
 def authenticate(username: str, password: str) -> bool:
+    registry_user = _find_registry_user(username)
+    if registry_user:
+        return _verify_password_hash(password, registry_user["password_hash"])
+
     username_ok = False
     normalized = normalize_identifier(username)
     configured = normalize_identifier(BASIC_AUTH_USER)
@@ -86,12 +140,46 @@ def identifier_candidates(identifier: str) -> list[str]:
 
 
 def canonical_identifier(identifier: str) -> str:
+    registry_user = _find_registry_user(identifier)
+    if registry_user and isinstance(registry_user.get("username"), str):
+        return registry_user["username"]
+
     normalized = normalize_identifier(identifier)
     configured = normalize_identifier(BASIC_AUTH_USER)
     for candidate in identifier_candidates(normalized):
         if secrets.compare_digest(candidate, configured):
             return BASIC_AUTH_USER
     return identifier.strip()
+
+
+def create_user(username: str, password: str, created_by: str) -> dict:
+    normalized = normalize_identifier(username)
+    if not re.fullmatch(r"[a-z0-9._-]{3,64}(@[a-z0-9.-]{3,255})?", normalized):
+        raise ValueError("Username must be 3-64 chars and use [a-z0-9._-], optional @domain.")
+    if len(password) < 8:
+        raise ValueError("Password must be at least 8 characters.")
+    if _find_registry_user(normalized):
+        raise ValueError("User already exists.")
+
+    users = _load_users()
+    salt = secrets.token_urlsafe(16)
+    iterations = 210000
+    password_hash = f"pbkdf2_sha256${iterations}${salt}${_hash_password(password, salt, iterations)}"
+    now = _utc_now()
+    record = {
+        "username": normalized,
+        "password_hash": password_hash,
+        "created_by": created_by,
+        "created_at": now,
+        "updated_at": now,
+    }
+    users.append(record)
+    _save_users(users)
+    return {
+        "username": normalized,
+        "created_by": created_by,
+        "created_at": now,
+    }
 
 
 def create_session(username: str) -> str:
