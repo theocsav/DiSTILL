@@ -44,6 +44,15 @@ ALLOWED_ORIGINS = [
     for origin in os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
     if origin.strip()
 ]
+SLURM_BACKEND = os.environ.get("SLURM_BACKEND", "local").strip().lower()
+SSH_HOST = os.environ.get("SSH_HOST", "").strip()
+SSH_PORT = int(os.environ.get("SSH_PORT", "22"))
+SSH_USER = os.environ.get("SSH_USER", "").strip()
+SSH_KEY_PATH = os.environ.get("SSH_KEY_PATH", "").strip()
+SSH_KNOWN_HOSTS = os.environ.get("SSH_KNOWN_HOSTS", "").strip()
+SSH_STRICT_HOST_KEY_CHECKING = os.environ.get("SSH_STRICT_HOST_KEY_CHECKING", "yes").strip()
+SSH_CONNECT_TIMEOUT_SECONDS = int(os.environ.get("SSH_CONNECT_TIMEOUT_SECONDS", "10"))
+SSH_REMOTE_RUNS_DIR = os.environ.get("SSH_REMOTE_RUNS_DIR", "").strip()
 RUN_RETENTION_DAYS = int(os.environ.get("RUN_RETENTION_DAYS", "30"))
 CLEANUP_INTERVAL_SECONDS = int(os.environ.get("CLEANUP_INTERVAL_SECONDS", "3600"))
 DISK_WARN_FREE_GB = int(os.environ.get("DISK_WARN_FREE_GB", "50"))
@@ -91,6 +100,15 @@ def validate_settings() -> None:
         raise RuntimeError("UPLOAD_MAX_CONCURRENT_PER_USER must be > 0.")
     if min(UPLOAD_MAX_SIZE_STAGED_GB, UPLOAD_MAX_SIZE_METADATA_GB, UPLOAD_MAX_SIZE_REFERENCE_GB) <= 0:
         raise RuntimeError("Upload max size limits must be > 0.")
+    if SLURM_BACKEND not in {"local", "ssh"}:
+        raise RuntimeError("SLURM_BACKEND must be 'local' or 'ssh'.")
+    if SLURM_BACKEND == "ssh":
+        if not SSH_HOST:
+            raise RuntimeError("SSH_HOST is required when SLURM_BACKEND=ssh.")
+        if not SSH_USER:
+            raise RuntimeError("SSH_USER is required when SLURM_BACKEND=ssh.")
+        if not SSH_REMOTE_RUNS_DIR:
+            raise RuntimeError("SSH_REMOTE_RUNS_DIR is required when SLURM_BACKEND=ssh.")
     for root in ARTIFACT_ROOTS:
         if not root.is_absolute():
             raise RuntimeError("ARTIFACT_ROOTS must contain absolute paths.")

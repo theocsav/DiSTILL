@@ -391,6 +391,7 @@ export type UploadInitPayload = {
   file_name: string;
   total_size: number;
   content_type?: string;
+  expected_sha256?: string;
 };
 
 export type UploadSession = {

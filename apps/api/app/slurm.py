@@ -1,11 +1,12 @@
-import subprocess
 from typing import Dict, Optional, Tuple, Union
+
+from .ssh_exec import run_command
 
 
 def _run_command(cmd: list[str]) -> Optional[str]:
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
-    except FileNotFoundError:
+        result = run_command(cmd)
+    except (FileNotFoundError, RuntimeError):
         return None
     if result.returncode != 0:
         return None
@@ -113,7 +114,7 @@ def get_job_state(job_id: str) -> Optional[str]:
 
 def cancel_job(job_id: str) -> bool:
     try:
-        result = subprocess.run(["scancel", job_id], capture_output=True, text=True)
-    except FileNotFoundError:
+        result = run_command(["scancel", job_id])
+    except (FileNotFoundError, RuntimeError):
         return False
     return result.returncode == 0

@@ -92,6 +92,7 @@ from .logging import configure_logging
 from .worker import loop as worker_loop
 from .storage import enforce_allowed_path, list_artifacts, safe_join
 from .validation import validate_config
+from .ssh_exec import run_command, remote_path_exists
 
 logger = logging.getLogger(__name__)
 
@@ -900,18 +901,19 @@ def cancel_run(run_id: int) -> dict:
 
 def _check_command(name: str) -> bool:
     try:
-        result = subprocess.run([name, "--version"], capture_output=True, text=True)
+        result = run_command([name, "--version"])
         return result.returncode == 0
-    except FileNotFoundError:
+    except (FileNotFoundError, RuntimeError):
         return False
 
 
 def _check_path(path: Path) -> bool:
-    return path.exists()
+    result = remote_path_exists(str(path))
+    return bool(result)
 
 
 def _check_artifact_roots() -> bool:
-    return all(root.exists() for root in ARTIFACT_ROOTS)
+    return all(bool(remote_path_exists(str(root))) for root in ARTIFACT_ROOTS)
 
 
 def _disk_usage_report() -> dict:

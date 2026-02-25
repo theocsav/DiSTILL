@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .registry import get_dataset
 from .settings import ARTIFACT_ROOTS, REPO_ROOT
+from .ssh_exec import is_ssh_backend, remote_path_exists, remote_path_readable
 from .storage import enforce_allowed_path
 
 
@@ -120,14 +121,19 @@ def validate_config(
             checks["permissions"][key] = "skipped"
             return
 
-        exists = path.exists()
+        exists_result = remote_path_exists(value)
+        exists = bool(exists_result)
         checks["exists"][key] = exists
         if not exists:
             errors.append(f"Path does not exist: {key} -> {value}")
             checks["permissions"][key] = "skipped"
             return
 
-        readable = os.access(path, os.R_OK)
+        if is_ssh_backend():
+            readable_result = remote_path_readable(value)
+            readable = bool(readable_result)
+        else:
+            readable = os.access(path, os.R_OK)
         checks["permissions"][key] = readable
         if not readable:
             errors.append(f"Path not readable: {key} -> {value}")

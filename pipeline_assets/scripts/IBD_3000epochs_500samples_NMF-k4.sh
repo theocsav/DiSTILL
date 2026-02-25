@@ -8,7 +8,7 @@
 #SBATCH --time=72:00:00     # Max time (hh:mm:ss)
 #SBATCH --mem=500gb           # Memory per node
 #SBATCH --qos=kejun.huang-b   # Partition to submit to
-#SBATCH --mail-user=tan.m@ufl.edu
+#SBATCH --mail-user=vasco.hinostroza@ufl.edu
 #SBATCH --mail-type=ALL
 
 

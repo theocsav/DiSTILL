@@ -1,12 +1,15 @@
 import json
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from .registry import get_dataset
-from .settings import ARTIFACT_ROOTS, PRESETS_DIR, REPO_ROOT, RUNS_DIR
+from .settings import ARTIFACT_ROOTS, PRESETS_DIR, REPO_ROOT, RUNS_DIR, SLURM_BACKEND, SSH_REMOTE_RUNS_DIR
+from .ssh_exec import run_ssh_command, scp_upload, shell_quote
 from .storage import enforce_allowed_path
 
 PIPELINE_RUNNER = REPO_ROOT / "run_pipeline.py"
@@ -68,6 +71,9 @@ def resolve_run_paths(run_name: str, config: Dict[str, Any]) -> tuple[Path, Path
 
 
 def prepare_run(run_name: str, config: Dict[str, Any], submit: bool) -> Tuple[str, str, str, Optional[str]]:
+    if SLURM_BACKEND == "ssh":
+        return _prepare_run_ssh(run_name, config, submit)
+
     run_dir, output_dir, config = resolve_run_paths(run_name, config)
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -96,3 +102,89 @@ def prepare_run(run_name: str, config: Dict[str, Any], submit: bool) -> Tuple[st
             job_id = match.group(1)
 
     return str(run_dir), str(output_dir), str(config_path), job_id
+
+
+def _prepare_run_ssh(run_name: str, config: Dict[str, Any], submit: bool) -> Tuple[str, str, str, Optional[str]]:
+    run_dir, output_dir, config = resolve_run_paths(run_name, config)
+    remote_run_dir = _remote_run_dir(run_name)
+
+    with tempfile.TemporaryDirectory(prefix=f"nicherunner-{run_name}-") as tmp_dir:
+        staging_root = Path(tmp_dir)
+        local_run_dir = staging_root / run_name
+        local_run_dir.mkdir(parents=True, exist_ok=True)
+
+        local_config = dict(config)
+        local_config["run_dir"] = str(local_run_dir)
+        local_config_path = local_run_dir / "config.json"
+        local_config_path.write_text(json.dumps(local_config, indent=2), encoding="utf-8")
+
+        emit_sbatch = submit or bool(config.get("slurm", {}).get("enabled"))
+        cmd = [sys.executable, str(PIPELINE_RUNNER), "--config", str(local_config_path)]
+        if emit_sbatch:
+            cmd.append("--emit-sbatch")
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr or result.stdout or "Pipeline preparation failed")
+
+        _rewrite_staged_paths(local_run_dir, str(local_run_dir).replace("\\", "/"), remote_run_dir)
+        _upload_run_dir_ssh(local_run_dir, remote_run_dir)
+
+    job_id = None
+    if submit:
+        submit_path = f"{remote_run_dir}/submit.sh"
+        submit_result = run_ssh_command(f"sbatch {shell_quote(submit_path)}")
+        if submit_result.returncode != 0:
+            raise RuntimeError(submit_result.stderr or submit_result.stdout or "sbatch failed")
+        match = re.search(r"Submitted batch job (\d+)", submit_result.stdout)
+        if match:
+            job_id = match.group(1)
+
+    output_dir_str = str(output_dir).replace("\\", "/")
+    remote_output_dir = output_dir_str.replace(str(run_dir).replace("\\", "/"), remote_run_dir, 1)
+    config_path = f"{remote_run_dir}/config.json"
+    return remote_run_dir, remote_output_dir, config_path, job_id
+
+
+def _remote_run_dir(run_name: str) -> str:
+    base = SSH_REMOTE_RUNS_DIR.rstrip("/")
+    return f"{base}/{run_name}"
+
+
+def _rewrite_staged_paths(run_dir: Path, local_prefix: str, remote_prefix: str) -> None:
+    for path in run_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        if path.suffix not in {".sh", ".json", ".py"}:
+            continue
+        text = path.read_text(encoding="utf-8")
+        updated = text.replace(local_prefix, remote_prefix)
+        if updated != text:
+            path.write_text(updated, encoding="utf-8")
+
+
+def _upload_run_dir_ssh(local_run_dir: Path, remote_run_dir: str) -> None:
+    # Copy prepared run artifacts to the remote HPG path before submission.
+    remote_parent = str(Path(remote_run_dir).parent).replace("\\", "/")
+    remote_target = remote_run_dir.replace("\\", "/")
+    mkdir = run_ssh_command(f"mkdir -p {shell_quote(remote_parent)}")
+    if mkdir.returncode != 0:
+        raise RuntimeError(mkdir.stderr or mkdir.stdout or f"Failed to create remote directory: {remote_parent}")
+
+    archive_base = local_run_dir.parent / f"{local_run_dir.name}.tar"
+    archive_path = shutil.make_archive(str(archive_base.with_suffix("")), "tar", root_dir=local_run_dir.parent, base_dir=local_run_dir.name)
+    try:
+        copied = scp_upload(archive_path, remote_parent)
+        if copied.returncode != 0:
+            raise RuntimeError(copied.stderr or copied.stdout or "scp upload failed")
+        archive_name = Path(archive_path).name
+        remote_archive = f"{remote_parent}/{archive_name}"
+        extract = run_ssh_command(
+            f"tar -xf {shell_quote(remote_archive)} -C {shell_quote(remote_parent)} && rm -f {shell_quote(remote_archive)}"
+        )
+        if extract.returncode != 0:
+            raise RuntimeError(extract.stderr or extract.stdout or "Remote extract failed")
+        run_ssh_command(f"chmod +x {shell_quote(remote_target)}/run.sh || true")
+        run_ssh_command(f"chmod +x {shell_quote(remote_target)}/submit.sh || true")
+    finally:
+        Path(archive_path).unlink(missing_ok=True)

@@ -11,6 +11,7 @@ from .settings import (
     RUNS_DIR,
 )
 from .slurm import get_job_state
+from .ssh_exec import is_ssh_backend
 
 
 TERMINAL_SUCCESS = {"COMPLETED"}
@@ -18,6 +19,12 @@ TERMINAL_FAIL = {"CANCELLED", "CANCELLED+", "FAILED", "TIMEOUT", "NODE_FAIL", "O
 
 
 def run_slurm_preflight(config: Dict[str, Any]) -> Dict[str, Any]:
+    if is_ssh_backend():
+        return {
+            "ok": False,
+            "error": "PREFLIGHT_SLURM_FALLBACK is not supported with SLURM_BACKEND=ssh. Install join-key dependencies on the API host.",
+        }
+
     base_slurm = config.get("slurm", {})
     preflight_override = config.get("preflight_slurm", {})
     slurm_cfg = dict(base_slurm)

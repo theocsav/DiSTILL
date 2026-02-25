@@ -187,6 +187,8 @@ GET /runs/{run_id}/summary
 - `DATASETS_REGISTRY_PATH`
 - `PREFLIGHT_SLURM_FALLBACK`, `PREFLIGHT_SLURM_TIMEOUT_SECONDS`, `PREFLIGHT_SLURM_POLL_SECONDS`
 - `PREFLIGHT_CACHE_TTL_SECONDS`
+- `SLURM_BACKEND` (`local` or `ssh`)
+- `SSH_HOST`, `SSH_PORT`, `SSH_USER`, `SSH_KEY_PATH`, `SSH_KNOWN_HOSTS`, `SSH_STRICT_HOST_KEY_CHECKING`, `SSH_CONNECT_TIMEOUT_SECONDS`, `SSH_REMOTE_RUNS_DIR`
 - `QUEUE_ENABLED`, `WORKER_ENABLED` (default false), `WORKER_POLL_SECONDS`
 - `RUN_RETENTION_DAYS`, `CLEANUP_INTERVAL_SECONDS`
 - `DISK_WARN_FREE_GB`, `DISK_WARN_PERCENT`
@@ -209,6 +211,34 @@ Stage logs are written under `output_dir/logs/`.
 
 If the API runs on a VM and SLURM submission happens from a login node, see
 `docs/SSH_SUBMITTER.md` for the SSH submitter configuration and a smoke test.
+
+### Built-in SSH backend (API on AWS, jobs on HPG)
+
+You can run the API on AWS and execute SLURM commands on HPG over SSH.
+Set:
+
+- `SLURM_BACKEND=ssh`
+- `SSH_HOST=<hpg-login-host>`
+- `SSH_USER=<uf-user>`
+- `SSH_REMOTE_RUNS_DIR=/blue/<group>/<user>/nicherunner/runs`
+
+Optional:
+
+- `SSH_PORT` (default `22`)
+- `SSH_KEY_PATH` (private key path)
+- `SSH_KNOWN_HOSTS` (known_hosts path)
+- `SSH_STRICT_HOST_KEY_CHECKING` (default `yes`)
+- `SSH_CONNECT_TIMEOUT_SECONDS` (default `10`)
+
+Behavior in SSH backend:
+
+- `sbatch/squeue/sacct/scancel` run on `SSH_HOST`.
+- Run staging files are prepared on API host, uploaded to `SSH_REMOTE_RUNS_DIR`, then submitted remotely.
+- Preflight path checks (`exists`/`permissions`) run remotely over SSH.
+
+Current limitation:
+
+- `PREFLIGHT_SLURM_FALLBACK=true` is not supported with `SLURM_BACKEND=ssh`; install `anndata` and `pandas` on the API host for join-key checks.
 
 ## Password hash (optional)
 
