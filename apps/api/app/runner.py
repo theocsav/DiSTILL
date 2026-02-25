@@ -3,6 +3,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -74,6 +75,10 @@ def prepare_run(run_name: str, config: Dict[str, Any], submit: bool) -> Tuple[st
     if SLURM_BACKEND == "ssh":
         return _prepare_run_ssh(run_name, config, submit)
 
+    return _prepare_run_local(run_name, config, submit)
+
+
+def _prepare_run_local(run_name: str, config: Dict[str, Any], submit: bool) -> Tuple[str, str, str, Optional[str]]:
     run_dir, output_dir, config = resolve_run_paths(run_name, config)
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -188,3 +193,41 @@ def _upload_run_dir_ssh(local_run_dir: Path, remote_run_dir: str) -> None:
         run_ssh_command(f"chmod +x {shell_quote(remote_target)}/submit.sh || true")
     finally:
         Path(archive_path).unlink(missing_ok=True)
+
+
+def prepare_run_bundle(run_name: str, config: Dict[str, Any], remote_run_dir: Optional[str] = None) -> Dict[str, str]:
+    run_dir, output_dir, config = resolve_run_paths(run_name, config)
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    config_path = run_dir / "config.json"
+    config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+    cmd = [sys.executable, str(PIPELINE_RUNNER), "--config", str(config_path), "--emit-sbatch"]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr or result.stdout or "Pipeline preparation failed")
+
+    submit_path = run_dir / "submit.sh"
+    if not submit_path.exists():
+        raise FileNotFoundError("submit.sh not found after preparation")
+    submit_script = submit_path.read_text(encoding="utf-8")
+
+    if remote_run_dir:
+        _rewrite_staged_paths(run_dir, str(run_dir).replace("\\", "/"), remote_run_dir.replace("\\", "/"))
+        submit_script = submit_path.read_text(encoding="utf-8")
+
+    bundle_path = run_dir / "run_bundle.tar.gz"
+    with tarfile.open(bundle_path, "w:gz") as tar:
+        for path in run_dir.rglob("*"):
+            if not path.is_file() or path == bundle_path:
+                continue
+            arcname = path.relative_to(run_dir)
+            tar.add(path, arcname=str(arcname))
+
+    return {
+        "run_dir": str(run_dir),
+        "output_dir": str(output_dir),
+        "config_path": str(config_path),
+        "bundle_path": str(bundle_path),
+        "submit_script": submit_script,
+    }

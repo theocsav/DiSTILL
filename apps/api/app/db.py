@@ -1,5 +1,6 @@
 import sqlite3
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from .settings import DB_PATH
@@ -48,6 +49,8 @@ def init_db() -> None:
                 run_id INTEGER PRIMARY KEY,
                 state TEXT NOT NULL,
                 submit INTEGER NOT NULL DEFAULT 1,
+                claim_id TEXT,
+                lease_expires_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -71,6 +74,10 @@ def init_db() -> None:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(run_queue)").fetchall()}
         if "submit" not in columns:
             conn.execute("ALTER TABLE run_queue ADD COLUMN submit INTEGER NOT NULL DEFAULT 1")
+        if "claim_id" not in columns:
+            conn.execute("ALTER TABLE run_queue ADD COLUMN claim_id TEXT")
+        if "lease_expires_at" not in columns:
+            conn.execute("ALTER TABLE run_queue ADD COLUMN lease_expires_at TEXT")
         conn.commit()
 
 
@@ -149,3 +156,85 @@ def remove_from_queue(run_id: int) -> None:
     with get_conn() as conn:
         conn.execute("DELETE FROM run_queue WHERE run_id = ?", (run_id,))
         conn.commit()
+
+
+def claim_next_run(lease_seconds: int) -> Optional[Dict[str, Any]]:
+    now = utc_now()
+    lease_until = (datetime.now(timezone.utc) + timedelta(seconds=max(lease_seconds, 30))).isoformat()
+    claim_id = uuid.uuid4().hex
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            """
+            SELECT run_id, submit
+            FROM run_queue
+            WHERE state = 'queued'
+               OR (state = 'claimed' AND lease_expires_at IS NOT NULL AND lease_expires_at < ?)
+            ORDER BY created_at ASC
+            LIMIT 1
+            """,
+            (now,),
+        )
+        row = cur.fetchone()
+        if not row:
+            conn.commit()
+            return None
+        run_id = int(row["run_id"])
+        submit = int(row["submit"])
+        conn.execute(
+            """
+            UPDATE run_queue
+            SET state = 'claimed', claim_id = ?, lease_expires_at = ?, updated_at = ?
+            WHERE run_id = ?
+            """,
+            (claim_id, lease_until, now, run_id),
+        )
+        conn.commit()
+        return {
+            "run_id": run_id,
+            "submit": submit,
+            "claim_id": claim_id,
+            "lease_expires_at": lease_until,
+        }
+
+
+def complete_claim(run_id: int, claim_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT claim_id FROM run_queue WHERE run_id = ? AND state = 'claimed'",
+            (run_id,),
+        )
+        row = cur.fetchone()
+        if not row or str(row["claim_id"] or "") != claim_id:
+            return False
+        conn.execute("DELETE FROM run_queue WHERE run_id = ?", (run_id,))
+        conn.commit()
+        return True
+
+
+def release_claim(run_id: int, claim_id: str, state: str = "queued") -> bool:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT claim_id FROM run_queue WHERE run_id = ? AND state = 'claimed'",
+            (run_id,),
+        )
+        row = cur.fetchone()
+        if not row or str(row["claim_id"] or "") != claim_id:
+            return False
+        conn.execute(
+            """
+            UPDATE run_queue
+            SET state = ?, claim_id = NULL, lease_expires_at = NULL, updated_at = ?
+            WHERE run_id = ?
+            """,
+            (state, utc_now(), run_id),
+        )
+        conn.commit()
+        return True
+
+
+def fetch_queue_item(run_id: int) -> Optional[Dict[str, Any]]:
+    with get_conn() as conn:
+        cur = conn.execute("SELECT * FROM run_queue WHERE run_id = ?", (run_id,))
+        row = cur.fetchone()
+    return dict(row) if row else None

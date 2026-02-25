@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -11,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -28,7 +29,18 @@ from .auth import (
     set_session_cookie,
     verify_progress_token,
 )
-from .db import create_run, enqueue_run, fetch_run, init_db, list_runs, update_run
+from .db import (
+    claim_next_run,
+    complete_claim,
+    create_run,
+    enqueue_run,
+    fetch_queue_item,
+    fetch_run,
+    init_db,
+    list_runs,
+    release_claim,
+    update_run,
+)
 from .preflight_cache import build_cache_key, get_cached_join_result, set_cached_join_result
 from .registry import (
     dataset_manifest_hash,
@@ -39,7 +51,14 @@ from .registry import (
     update_dataset,
     upsert_dataset,
 )
-from .runner import apply_dataset_registry, load_preset, prepare_run, resolve_run_paths, PIPELINE_RUNNER
+from .runner import (
+    PIPELINE_RUNNER,
+    apply_dataset_registry,
+    load_preset,
+    prepare_run,
+    prepare_run_bundle,
+    resolve_run_paths,
+)
 from .schemas import (
     DryRunRequest,
     DatasetUpdateRequest,
@@ -85,6 +104,9 @@ from .settings import (
     PREFLIGHT_SLURM_FALLBACK,
     PREFLIGHT_CACHE_TTL_SECONDS,
     WORKER_ENABLED,
+    QUEUE_CLAIM_LEASE_SECONDS,
+    QUEUE_POLLER_TOKEN,
+    SSH_REMOTE_RUNS_DIR,
     validate_settings,
 )
 from .slurm import cancel_job
@@ -95,6 +117,13 @@ from .validation import validate_config
 from .ssh_exec import run_command, remote_path_exists
 
 logger = logging.getLogger(__name__)
+
+
+def require_queue_poller(x_queue_token: Optional[str] = Header(default=None, alias="X-Queue-Token")) -> None:
+    if not QUEUE_POLLER_TOKEN:
+        raise HTTPException(status_code=503, detail="Queue poller token is not configured.")
+    if not x_queue_token or not secrets.compare_digest(x_queue_token, QUEUE_POLLER_TOKEN):
+        raise HTTPException(status_code=401, detail="Invalid queue poller token")
 
 
 def upload_cleanup_loop() -> None:
@@ -464,6 +493,133 @@ def get_presets(
 @app.get("/runs", response_model=list[RunResponse], dependencies=[Depends(require_session)])
 def get_runs() -> list[dict]:
     return list_runs()
+
+
+@app.post("/queue/claim", dependencies=[Depends(require_queue_poller)])
+def queue_claim(request: Request) -> dict:
+    claimed = claim_next_run(QUEUE_CLAIM_LEASE_SECONDS)
+    if not claimed:
+        return {"ok": True, "job": None}
+
+    run = fetch_run(int(claimed["run_id"]))
+    if not run:
+        release_claim(int(claimed["run_id"]), str(claimed["claim_id"]), state="error")
+        return {"ok": False, "error": "Run not found for claimed queue item."}
+
+    config_path = run.get("config_path")
+    if not config_path:
+        release_claim(int(claimed["run_id"]), str(claimed["claim_id"]), state="error")
+        return {"ok": False, "error": "Run config_path is missing."}
+    try:
+        config = json.loads(Path(config_path).read_text(encoding="utf-8"))
+        remote_run_dir = f"{SSH_REMOTE_RUNS_DIR.rstrip('/')}/{run['run_name']}" if SSH_REMOTE_RUNS_DIR else None
+        prepared = prepare_run_bundle(run["run_name"], config, remote_run_dir=remote_run_dir)
+        update_run(
+            int(run["id"]),
+            status="prepared",
+            run_dir=remote_run_dir or prepared["run_dir"],
+            output_dir=prepared["output_dir"],
+            config_path=prepared["config_path"],
+        )
+    except Exception as exc:
+        release_claim(int(claimed["run_id"]), str(claimed["claim_id"]), state="queued")
+        return {"ok": False, "error": f"Failed to prepare run bundle: {exc}"}
+
+    origin = str(request.base_url).rstrip("/")
+    run_id = int(run["id"])
+    claim_id = str(claimed["claim_id"])
+    bundle_url = f"{origin}/queue/bundles/{run_id}?claim_id={claim_id}"
+    return {
+        "ok": True,
+        "job": {
+            "run_id": run_id,
+            "run_name": run["run_name"],
+            "claim_id": claim_id,
+            "lease_expires_at": claimed["lease_expires_at"],
+            "bundle_url": bundle_url,
+            "submit_script": prepared["submit_script"],
+        },
+    }
+
+
+@app.get("/queue/bundles/{run_id}", dependencies=[Depends(require_queue_poller)])
+def queue_bundle(run_id: int, claim_id: str = Query(...)) -> FileResponse:
+    queue_item = fetch_queue_item(run_id)
+    if not queue_item:
+        raise HTTPException(status_code=404, detail="Queue item not found.")
+    if queue_item.get("state") != "claimed":
+        raise HTTPException(status_code=409, detail="Queue item is not currently claimed.")
+    if str(queue_item.get("claim_id") or "") != claim_id:
+        raise HTTPException(status_code=403, detail="Claim ID mismatch.")
+
+    run = fetch_run(run_id)
+    if not run or not run.get("run_dir"):
+        raise HTTPException(status_code=404, detail="Run directory not found.")
+    bundle_path = Path(str(run["run_dir"])) / "run_bundle.tar.gz"
+    if not bundle_path.exists():
+        raise HTTPException(status_code=404, detail="Run bundle not found.")
+    return FileResponse(path=str(bundle_path), filename=f"run_{run_id}_bundle.tar.gz")
+
+
+@app.post("/queue/report-submission", dependencies=[Depends(require_queue_poller)])
+def queue_report_submission(
+    run_id: int = Form(...),
+    claim_id: str = Form(...),
+    slurm_job_id: str = Form(...),
+    message: str = Form(default="Submitted by HPG poller"),
+) -> dict:
+    ok = complete_claim(run_id, claim_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail="Claim is invalid or expired.")
+    update_run(run_id, status="submitted", job_id=slurm_job_id, message=message)
+    return {"ok": True}
+
+
+@app.post("/queue/report-status", dependencies=[Depends(require_queue_poller)])
+def queue_report_status(
+    run_id: int = Form(...),
+    status: str = Form(...),
+    slurm_state: str = Form(default=""),
+    slurm_reason: str = Form(default=""),
+    slurm_elapsed: str = Form(default=""),
+    started_at: str = Form(default=""),
+    finished_at: str = Form(default=""),
+    message: str = Form(default=""),
+) -> dict:
+    run = fetch_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    update_fields: dict = {"status": status}
+    if slurm_state:
+        update_fields["slurm_state"] = slurm_state
+    if slurm_reason:
+        update_fields["slurm_reason"] = slurm_reason
+    if slurm_elapsed:
+        update_fields["slurm_elapsed"] = slurm_elapsed
+    if started_at:
+        update_fields["started_at"] = started_at
+    if finished_at:
+        update_fields["finished_at"] = finished_at
+    if message:
+        update_fields["message"] = message
+    update_run(run_id, **update_fields)
+    return {"ok": True}
+
+
+@app.get("/queue/active", dependencies=[Depends(require_queue_poller)])
+def queue_active_runs() -> dict:
+    active = []
+    for run in list_runs():
+        if run.get("job_id") and run.get("status") in {"submitted", "running", "queued", "unknown"}:
+            active.append(
+                {
+                    "run_id": run["id"],
+                    "run_name": run["run_name"],
+                    "job_id": run.get("job_id"),
+                    "status": run.get("status"),
+                }
+            )
+    return {"ok": True, "items": active}
 
 
 @app.get("/runs/{run_id}", response_model=RunResponse, dependencies=[Depends(require_session)])

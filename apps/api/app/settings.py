@@ -53,6 +53,8 @@ SSH_KNOWN_HOSTS = os.environ.get("SSH_KNOWN_HOSTS", "").strip()
 SSH_STRICT_HOST_KEY_CHECKING = os.environ.get("SSH_STRICT_HOST_KEY_CHECKING", "yes").strip()
 SSH_CONNECT_TIMEOUT_SECONDS = int(os.environ.get("SSH_CONNECT_TIMEOUT_SECONDS", "10"))
 SSH_REMOTE_RUNS_DIR = os.environ.get("SSH_REMOTE_RUNS_DIR", "").strip()
+QUEUE_POLLER_TOKEN = os.environ.get("QUEUE_POLLER_TOKEN", "").strip()
+QUEUE_CLAIM_LEASE_SECONDS = int(os.environ.get("QUEUE_CLAIM_LEASE_SECONDS", "600"))
 RUN_RETENTION_DAYS = int(os.environ.get("RUN_RETENTION_DAYS", "30"))
 CLEANUP_INTERVAL_SECONDS = int(os.environ.get("CLEANUP_INTERVAL_SECONDS", "3600"))
 DISK_WARN_FREE_GB = int(os.environ.get("DISK_WARN_FREE_GB", "50"))
@@ -109,6 +111,8 @@ def validate_settings() -> None:
             raise RuntimeError("SSH_USER is required when SLURM_BACKEND=ssh.")
         if not SSH_REMOTE_RUNS_DIR:
             raise RuntimeError("SSH_REMOTE_RUNS_DIR is required when SLURM_BACKEND=ssh.")
+    if QUEUE_CLAIM_LEASE_SECONDS < 30:
+        raise RuntimeError("QUEUE_CLAIM_LEASE_SECONDS must be >= 30.")
     for root in ARTIFACT_ROOTS:
         if not root.is_absolute():
             raise RuntimeError("ARTIFACT_ROOTS must contain absolute paths.")
