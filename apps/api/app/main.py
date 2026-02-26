@@ -553,9 +553,12 @@ def queue_bundle(run_id: int, claim_id: str = Query(...)) -> FileResponse:
         raise HTTPException(status_code=403, detail="Claim ID mismatch.")
 
     run = fetch_run(run_id)
-    if not run or not run.get("run_dir"):
-        raise HTTPException(status_code=404, detail="Run directory not found.")
-    bundle_path = Path(str(run["run_dir"])) / "run_bundle.tar.gz"
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    config_path = run.get("config_path")
+    if not config_path:
+        raise HTTPException(status_code=404, detail="Run config path not found.")
+    bundle_path = Path(str(config_path)).parent / "run_bundle.tar.gz"
     if not bundle_path.exists():
         raise HTTPException(status_code=404, detail="Run bundle not found.")
     return FileResponse(path=str(bundle_path), filename=f"run_{run_id}_bundle.tar.gz")
