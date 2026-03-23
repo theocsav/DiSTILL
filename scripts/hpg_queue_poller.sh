@@ -60,7 +60,6 @@ PY
 )"
 
 bundle_url="${bundle_url/http:\/\//https:\/\/}"
-bundle_url="${bundle_url/http:\/\//https:\/\/}"
 
 target_dir="$POLLER_RUNS_DIR/$run_name"
 mkdir -p "$target_dir"
