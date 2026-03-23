@@ -23,7 +23,6 @@ from kneed import KneeLocator
 from collections import defaultdict
 from scipy.stats import kruskal
 from statsmodels.stats.multitest import multipletests
-import ace_tools_open as tools
 from tqdm import tqdm
 import scipy.sparse
 import re
