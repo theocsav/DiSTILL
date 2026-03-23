@@ -10,6 +10,7 @@ set -euo pipefail
 API_BASE="${API_BASE:-}"
 QUEUE_POLLER_TOKEN="${QUEUE_POLLER_TOKEN:-}"
 POLLER_RUNS_DIR="${POLLER_RUNS_DIR:-/blue/kejun.huang/vasco.hinostroza/nicherunner/runs}"
+LOG_TAIL_LINES="${LOG_TAIL_LINES:-200}"
 
 if [[ -z "$API_BASE" || -z "$QUEUE_POLLER_TOKEN" ]]; then
   echo "API_BASE and QUEUE_POLLER_TOKEN are required." >&2
@@ -111,9 +112,10 @@ curl -fsS -X POST \
 # Lightweight status sync for active jobs.
 active_json="$tmpdir/active.json"
 curl -fsS -H "X-Queue-Token: $QUEUE_POLLER_TOKEN" "$API_BASE/queue/active" > "$active_json"
-python3 - <<'PY' "$active_json" "$API_BASE" "$QUEUE_POLLER_TOKEN"
+python3 - <<'PY' "$active_json" "$API_BASE" "$QUEUE_POLLER_TOKEN" "$POLLER_RUNS_DIR" "$LOG_TAIL_LINES"
+from collections import deque
 import json
-import re
+from pathlib import Path
 import subprocess
 import sys
 import urllib.parse
@@ -122,6 +124,11 @@ import urllib.request
 active = json.load(open(sys.argv[1], encoding="utf-8")).get("items", [])
 api_base = sys.argv[2].rstrip("/")
 token = sys.argv[3]
+runs_dir = Path(sys.argv[4])
+try:
+    log_tail_lines = max(int(sys.argv[5]), 1)
+except (TypeError, ValueError):
+    log_tail_lines = 200
 
 def map_state(state: str) -> str:
     s = (state or "").upper()
@@ -181,14 +188,57 @@ def get_info(job_id: str):
         }
     return None
 
+def tail_lines(path: Path, max_lines: int) -> str:
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        return "".join(deque(handle, max_lines)).strip()
+
+def collect_log_tail(run_name: str) -> str:
+    logs_dir = runs_dir / str(run_name) / "output" / "logs"
+    if not logs_dir.exists() or not logs_dir.is_dir():
+        return ""
+
+    candidates = []
+    preferred = ["cell2loc_nmf.err", "cell2loc_nmf.out"]
+    seen = set()
+    for name in preferred:
+        path = logs_dir / name
+        if path.exists() and path.is_file():
+            candidates.append(path)
+            seen.add(path.name)
+
+    others = sorted(logs_dir.glob("*.err")) + sorted(logs_dir.glob("*.out"))
+    for path in others:
+        if path.name in seen:
+            continue
+        candidates.append(path)
+        seen.add(path.name)
+
+    if not candidates:
+        return ""
+
+    sections = []
+    for path in candidates[:2]:
+        try:
+            content = tail_lines(path, log_tail_lines)
+        except Exception:
+            continue
+        if content:
+            sections.append(f"== {path.name} ==\n{content}")
+    if not sections:
+        return ""
+    message = "\n\n".join(sections)
+    return message[:12000]
+
 for item in active:
     run_id = item.get("run_id")
+    run_name = str(item.get("run_name") or "").strip()
     job_id = str(item.get("job_id") or "").strip()
     if not run_id or not job_id:
         continue
     info = get_info(job_id)
     if not info:
         continue
+    message = collect_log_tail(run_name) if run_name else ""
     payload = {
         "run_id": str(run_id),
         "status": map_state(info.get("state", "")),
@@ -198,6 +248,8 @@ for item in active:
         "started_at": info.get("started_at", ""),
         "finished_at": info.get("finished_at", ""),
     }
+    if message:
+        payload["message"] = message
     data = urllib.parse.urlencode(payload).encode("utf-8")
     req = urllib.request.Request(
         f"{api_base}/queue/report-status",

@@ -22,6 +22,7 @@ const RESOURCE_TIME_OPTIONS = ["1h", "2h", "6h", "12h", "24h", "96h"];
 const RESOURCE_CPU_OPTIONS = [4, 8, 16, 32];
 const RESOURCE_MEM_OPTIONS = ["16gb", "32gb", "64gb", "128gb", "400gb"];
 const PIPELINE_COMMIT = process.env.NEXT_PUBLIC_PIPELINE_COMMIT || "not set";
+const WEB_BASE = process.env.NEXT_PUBLIC_WEB_BASE;
 
 type PreflightResult = {
   ok: boolean;
@@ -430,10 +431,13 @@ export default function Home() {
     setShareLoadingId(run.id);
     try {
       const link = await createShareLink(run.id);
+      const fallbackOrigin = typeof window !== "undefined" ? window.location.origin : "";
+      const base = (WEB_BASE || fallbackOrigin).replace(/\/$/, "");
+      const progressUrl = `${base}/progress/${link.token}`;
       if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(link.url);
+        await navigator.clipboard.writeText(progressUrl);
       }
-      setStatus(`Progress link copied: ${link.url}`);
+      setStatus(`Progress link copied: ${progressUrl}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
