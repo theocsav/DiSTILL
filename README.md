@@ -73,6 +73,7 @@ For production HPG environment setup, see `docs/HPG_SETUP.md`.
 For Vercel + HPG cross-site env and upload tuning, see `docs/ENV_TEMPLATE.md`.
 For the cleaned roadmap and status, see `docs/ROADMAP.md`.
 For the current RunSpec/RunState contract, see `docs/RUNSPEC_RUNSTATE.md`.
+For the expected upload formats and stage-specific dataset requirements, see `docs/DATASET_CONTRACT.md`.
 
 The config typically includes:
 

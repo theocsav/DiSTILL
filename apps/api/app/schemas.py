@@ -34,6 +34,7 @@ class RunSpec(BaseModel):
     cosmx_h5ad_path: Optional[str] = None
     reference_h5ad_path: Optional[str] = None
     cell_metadata_path: Optional[str] = None
+    cosmx_with_nmf_path: Optional[str] = None
 
     run_dir: Optional[str] = None
     output_dir: Optional[str] = None

@@ -34,6 +34,7 @@ from .db import (
     complete_claim,
     create_run,
     enqueue_run,
+    append_run_message,
     fetch_queue_item,
     fetch_run,
     init_db,
@@ -106,7 +107,7 @@ from .settings import (
     WORKER_ENABLED,
     QUEUE_CLAIM_LEASE_SECONDS,
     QUEUE_POLLER_TOKEN,
-    SSH_REMOTE_RUNS_DIR,
+    QUEUE_REMOTE_RUNS_DIR,
     validate_settings,
 )
 from .slurm import cancel_job
@@ -117,6 +118,7 @@ from .validation import validate_config
 from .ssh_exec import run_command, remote_path_exists
 
 logger = logging.getLogger(__name__)
+VALID_RUN_STATUSES = {"created", "queued", "prepared", "submitted", "running", "succeeded", "failed", "canceled", "error", "unknown"}
 
 
 def require_queue_poller(x_queue_token: Optional[str] = Header(default=None, alias="X-Queue-Token")) -> None:
@@ -512,7 +514,7 @@ def queue_claim(request: Request) -> dict:
         return {"ok": False, "error": "Run config_path is missing."}
     try:
         config = json.loads(Path(config_path).read_text(encoding="utf-8"))
-        remote_run_dir = f"{SSH_REMOTE_RUNS_DIR.rstrip('/')}/{run['run_name']}" if SSH_REMOTE_RUNS_DIR else None
+        remote_run_dir = f"{QUEUE_REMOTE_RUNS_DIR.rstrip('/')}/{run['run_name']}" if QUEUE_REMOTE_RUNS_DIR else None
         prepared = prepare_run_bundle(run["run_name"], config, remote_run_dir=remote_run_dir)
         update_run(
             int(run["id"]),
@@ -522,8 +524,10 @@ def queue_claim(request: Request) -> dict:
             config_path=prepared["config_path"],
         )
     except Exception as exc:
-        release_claim(int(claimed["run_id"]), str(claimed["claim_id"]), state="queued")
-        return {"ok": False, "error": f"Failed to prepare run bundle: {exc}"}
+        message = f"Failed to prepare run bundle: {type(exc).__name__}: {exc}"
+        release_claim(int(claimed["run_id"]), str(claimed["claim_id"]), state="error")
+        update_run(int(run["id"]), status="error", message=message)
+        raise HTTPException(status_code=500, detail=message) from exc
 
     origin = str(request.base_url).rstrip("/")
     run_id = int(run["id"])
@@ -575,6 +579,10 @@ def queue_report_submission(
     if not ok:
         raise HTTPException(status_code=409, detail="Claim is invalid or expired.")
     update_run(run_id, status="submitted", job_id=slurm_job_id, message=message)
+    run = fetch_run(run_id)
+    if run and run.get("config_path"):
+        bundle_path = Path(str(run["config_path"])).parent / "run_bundle.tar.gz"
+        bundle_path.unlink(missing_ok=True)
     return {"ok": True}
 
 
@@ -592,6 +600,8 @@ def queue_report_status(
     run = fetch_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found.")
+    if status not in VALID_RUN_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
     update_fields: dict = {"status": status}
     if slurm_state:
         update_fields["slurm_state"] = slurm_state
@@ -603,9 +613,9 @@ def queue_report_status(
         update_fields["started_at"] = started_at
     if finished_at:
         update_fields["finished_at"] = finished_at
-    if message:
-        update_fields["message"] = message
     update_run(run_id, **update_fields)
+    if message:
+        append_run_message(run_id, message)
     return {"ok": True}
 
 
@@ -620,6 +630,7 @@ def queue_active_runs() -> dict:
                     "run_name": run["run_name"],
                     "job_id": run.get("job_id"),
                     "status": run.get("status"),
+                    "output_dir": run.get("output_dir"),
                 }
             )
     return {"ok": True, "items": active}
@@ -850,22 +861,31 @@ def _create_run_from_config(run_name: str, config: dict, submit: bool, queue: bo
             enqueue_run(run_id, submit=submit)
             update_run(run_id, status="queued")
         else:
-            run_dir_str, output_dir_str, config_path_str, job_id = prepare_run(run_name, config, submit)
-            status = "submitted" if submit else "prepared"
-            update_run(
-                run_id,
-                status=status,
-                run_dir=run_dir_str,
-                output_dir=output_dir_str,
-                config_path=config_path_str,
-                job_id=job_id,
-            )
+            if submit:
+                run_dir_str, output_dir_str, config_path_str, job_id = prepare_run(run_name, config, submit=True)
+                update_run(
+                    run_id,
+                    status="submitted",
+                    run_dir=run_dir_str,
+                    output_dir=output_dir_str,
+                    config_path=config_path_str,
+                    job_id=job_id,
+                )
+            else:
+                prepared = prepare_run_bundle(run_name, config)
+                update_run(
+                    run_id,
+                    status="prepared",
+                    run_dir=prepared["run_dir"],
+                    output_dir=prepared["output_dir"],
+                    config_path=prepared["config_path"],
+                )
     except HTTPException as exc:
         message = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
         update_run(run_id, status="error", message=message)
         raise
     except Exception as exc:
-        update_run(run_id, status="error", message=str(exc))
+        update_run(run_id, status="error", message=f"{type(exc).__name__}: {exc}")
         raise HTTPException(status_code=500, detail="Run creation failed") from exc
 
     run = fetch_run(run_id)

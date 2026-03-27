@@ -35,8 +35,12 @@ Provide the required paths in the run config:
 - `cosmx_h5ad_path`
 - `reference_h5ad_path`
 - `cell_metadata_path`
+- `cosmx_with_nmf_path` (optional; used when `post_nmf` runs standalone)
 
 You can also provide `dataset_id` to resolve paths from the dataset registry.
+
+For the expected upload formats and stage-specific dataset requirements, see
+`docs/DATASET_CONTRACT.md`.
 
 ## Registry endpoints
 
@@ -86,6 +90,14 @@ The RCausalMGM stage (`rcausal_mgm`) defaults to running the notebook with paper
 The report stage generates `report/report.html`, `report/figures/*`, `report/tables/*`, `artifacts/manifest.json`, and `artifacts/run_summary.json`; PDF generation uses `pandoc` if available.
 
 Preflight join-key validation (on by default) compares h5ad obs to metadata using `unique_cell_id` or `fov+cell_ID` and returns counts.
+Preflight also applies stage-aware dataset checks. Example messages include:
+
+- `cell2loc_nmf requires spatial coordinates in h5ad obs or metadata CSV: CenterX_global_px and CenterY_global_px.`
+- `post_nmf requires morphology in h5ad obs or metadata CSV: provide Area or both Width and Height.`
+- `post_nmf without cell2loc_nmf requires cosmx_with_nmf_path or an existing <output_dir>/cosmx_with_nmf.h5ad artifact.`
+- `post_nmf without cell2loc_nmf requires an NMF-annotated h5ad with NMF_factor or dominant_nmf_factor.`
+- `rcausal_mgm without cell2loc_nmf requires rcausal_h5ad_path, rcausal_niche_h5ad_path, or an existing cosmx_with_nmf.h5ad artifact.`
+
 Configure with:
 - `check_join_keys` (bool, default true)
 - `join_key_strategy` (`auto`, `unique_cell_id`, `fov_cell_id`)
@@ -189,12 +201,19 @@ GET /runs/{run_id}/summary
 - `PREFLIGHT_CACHE_TTL_SECONDS`
 - `SLURM_BACKEND` (`local` or `ssh`)
 - `SSH_HOST`, `SSH_PORT`, `SSH_USER`, `SSH_KEY_PATH`, `SSH_KNOWN_HOSTS`, `SSH_STRICT_HOST_KEY_CHECKING`, `SSH_CONNECT_TIMEOUT_SECONDS`, `SSH_REMOTE_RUNS_DIR`
+- `QUEUE_REMOTE_RUNS_DIR` (HPG poller staging root used for bundle path rewriting when the API does not SSH to HPG)
 - `QUEUE_ENABLED`, `WORKER_ENABLED` (default false), `WORKER_POLL_SECONDS`
 - `RUN_RETENTION_DAYS`, `CLEANUP_INTERVAL_SECONDS`
 - `DISK_WARN_FREE_GB`, `DISK_WARN_PERCENT`
 - `PREFLIGHT_CHECK_PATHS` (default true)
 
 Set `RUN_RETENTION_DAYS=0` to disable cleanup.
+
+When using the external HPG queue poller from an Oracle VM deployment:
+
+- set `WORKER_ENABLED=false` on the VM
+- set `QUEUE_REMOTE_RUNS_DIR` to the HPG runs root used by the poller, for example `/blue/<group>/<user>/nicherunner/runs`
+- do not rely on `SSH_REMOTE_RUNS_DIR` unless you are also using the SSH backend
 
 ## Worker
 

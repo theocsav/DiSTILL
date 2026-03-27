@@ -123,9 +123,13 @@ def _build_submit_script(script_path: str, conda_env: str, slurm_cfg: Dict[str, 
         lines.append(f"#SBATCH --qos={qos}")
     lines += [
         "",
-        "set -euo pipefail",
+        "set -eo pipefail",
         "module load conda",
+        "set +u",
+        'export MKL_INTERFACE_LAYER="${MKL_INTERFACE_LAYER:-LP64}"',
         f"conda activate {conda_env}",
+        "set -u",
+        "set -euo pipefail",
         f"python {script_path}",
         "",
     ]

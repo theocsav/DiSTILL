@@ -8,14 +8,17 @@ from .ssh_exec import is_ssh_backend, remote_path_exists, remote_path_readable
 from .storage import enforce_allowed_path
 
 
-REQUIRED_KEYS = ("cosmx_h5ad_path", "reference_h5ad_path", "cell_metadata_path")
-PATH_KEYS = REQUIRED_KEYS + ("ref_model_dir",)
+RAW_STAGE_REQUIRED_KEYS = ("cosmx_h5ad_path", "reference_h5ad_path", "cell_metadata_path")
+PATH_KEYS = RAW_STAGE_REQUIRED_KEYS + ("cosmx_with_nmf_path", "ref_model_dir")
 ALLOWED_STAGES = ("cell2loc_nmf", "post_nmf", "rcausal_mgm", "mlp", "report")
 DEFAULT_POST_NMF_NOTEBOOK = "pipeline_assets/IBD_Post_NMF_Analysis.ipynb"
 DEFAULT_RCAUSAL_NOTEBOOK = "pipeline_assets/IBD_RCausalMGM_Preparation.ipynb"
 DEFAULT_MLP_SCRIPT = "pipeline_assets/IBD_MLP_44Features.py"
 DEFAULT_REQUIRED_OBS_KEYS = ("fov", "cell_ID", "patient", "disease_status")
 DEFAULT_REQUIRED_METADATA_COLUMNS = ("CenterX_global_px", "CenterY_global_px", "fov", "cell_ID")
+NMF_LABEL_COLUMNS = ("NMF_factor", "dominant_nmf_factor")
+COORD_COLUMNS = ("CenterX_global_px", "CenterY_global_px")
+MORPHOLOGY_COLUMNS = ("Area", "Width", "Height")
 
 
 def resolve_repo_path(path_value: str) -> Path:
@@ -32,8 +35,11 @@ class DependencyMissingError(RuntimeError):
 def _read_h5ad_obs(path: Path):
     try:
         import anndata as ad
+        import numpy as np
     except ImportError as exc:
         raise DependencyMissingError("anndata is required for join-key validation.") from exc
+    if not hasattr(np, "string_"):
+        np.string_ = np.bytes_
     adata = ad.read_h5ad(path, backed="r")
     obs = adata.obs.copy()
     if getattr(adata, "file", None) is not None:
@@ -75,6 +81,118 @@ def _resolve_join_strategy(obs_columns: list[str], meta_columns: list[str]) -> s
     if "fov" in obs_columns and "cell_ID" in obs_columns and "fov" in meta_columns and "cell_ID" in meta_columns:
         return "fov_cell_id"
     raise RuntimeError("No compatible join keys found (unique_cell_id or fov+cell_ID).")
+
+
+def _has_all(columns: list[str], required: tuple[str, ...]) -> bool:
+    return all(column in columns for column in required)
+
+
+def _has_any(columns: list[str], required: tuple[str, ...]) -> bool:
+    return any(column in columns for column in required)
+
+
+def _has_morphology(columns: list[str]) -> bool:
+    return "Area" in columns or ("Width" in columns and "Height" in columns)
+
+
+def _validate_stage_data_contract(
+    stages: list[str],
+    config: Dict[str, Any],
+    check_paths: bool,
+    errors: List[str],
+    warnings: List[str],
+    checks: Dict[str, Any],
+) -> None:
+    if "post_nmf" in stages and "cell2loc_nmf" not in stages and not config.get("cosmx_with_nmf_path"):
+        errors.append(
+            "post_nmf without cell2loc_nmf requires cosmx_with_nmf_path or an existing <output_dir>/cosmx_with_nmf.h5ad artifact."
+        )
+
+    if (
+        "rcausal_mgm" in stages
+        and "cell2loc_nmf" not in stages
+        and not config.get("rcausal_h5ad_path")
+        and not config.get("rcausal_niche_h5ad_path")
+    ):
+        errors.append(
+            "rcausal_mgm without cell2loc_nmf requires rcausal_h5ad_path, rcausal_niche_h5ad_path, or an existing cosmx_with_nmf.h5ad artifact."
+        )
+
+    dataset = get_dataset(str(config.get("dataset_id") or "")) if config.get("dataset_id") else None
+    manifest = (dataset or {}).get("schema_manifest", {}) if dataset else {}
+    metadata_manifest = (dataset or {}).get("metadata_manifest", {}) if dataset else {}
+    obs_columns = list(manifest.get("obs_keys", [])) if manifest.get("obs_keys") else []
+    metadata_columns = list((dataset or {}).get("metadata_columns", [])) if dataset and dataset.get("metadata_columns") else []
+
+    if not obs_columns or not metadata_columns:
+        if not check_paths:
+            return
+        try:
+            obs = _read_h5ad_obs(Path(config["cosmx_h5ad_path"]))
+            obs_columns = list(obs.columns)
+            metadata_columns = _read_metadata_header(Path(config["cell_metadata_path"]))
+        except DependencyMissingError as exc:
+            warnings.append(f"Stage data-contract validation skipped due to missing dependencies: {exc}")
+            return
+        except Exception as exc:
+            warnings.append(f"Stage data-contract validation skipped: {exc}")
+            return
+
+    checks["stage_data_contract"] = {
+        "cosmx_obs_columns": obs_columns,
+        "metadata_columns": metadata_columns,
+    }
+
+    has_coords = bool(manifest.get("has_spatial_coordinates")) or bool(metadata_manifest.get("has_spatial_coordinates")) or _has_all(obs_columns, COORD_COLUMNS) or _has_all(metadata_columns, COORD_COLUMNS)
+    has_morphology = bool(manifest.get("has_morphology")) or bool(metadata_manifest.get("has_morphology")) or _has_morphology(obs_columns) or _has_morphology(metadata_columns)
+    has_nmf_labels = bool(manifest.get("has_nmf_labels")) or _has_any(obs_columns, NMF_LABEL_COLUMNS)
+
+    if "cell2loc_nmf" in stages:
+        if not has_coords:
+            errors.append(
+                "cell2loc_nmf requires spatial coordinates in h5ad obs or metadata CSV: CenterX_global_px and CenterY_global_px."
+            )
+
+    if "post_nmf" in stages:
+        if not has_coords:
+            errors.append(
+                "post_nmf requires spatial coordinates in h5ad obs or metadata CSV: CenterX_global_px and CenterY_global_px."
+            )
+        if not has_morphology:
+            errors.append(
+                "post_nmf requires morphology in h5ad obs or metadata CSV: provide Area or both Width and Height."
+            )
+        if "cell2loc_nmf" not in stages:
+            standalone_nmf_path = config.get("cosmx_with_nmf_path")
+            if standalone_nmf_path:
+                try:
+                    standalone_obs = _read_h5ad_obs(Path(standalone_nmf_path))
+                    standalone_columns = list(standalone_obs.columns)
+                    checks["stage_data_contract"]["cosmx_with_nmf_obs_columns"] = standalone_columns
+                    if not _has_any(standalone_columns, NMF_LABEL_COLUMNS):
+                        errors.append(
+                            "post_nmf without cell2loc_nmf requires an NMF-annotated h5ad with NMF_factor or dominant_nmf_factor."
+                        )
+                except Exception as exc:
+                    errors.append(f"post_nmf standalone input unreadable: {standalone_nmf_path} ({exc})")
+        elif not has_nmf_labels:
+            warnings.append(
+                "post_nmf will rely on cell2loc_nmf to generate NMF_factor before downstream analysis."
+            )
+
+    if "rcausal_mgm" in stages:
+        if not has_coords:
+            errors.append(
+                "rcausal_mgm requires spatial coordinates in h5ad obs or metadata CSV: CenterX_global_px and CenterY_global_px."
+            )
+        if not has_morphology:
+            warnings.append(
+                "rcausal_mgm is most reliable when Area or Width/Height are available in h5ad obs or metadata CSV."
+            )
+        if "cell2loc_nmf" not in stages and not has_nmf_labels:
+            warnings.append(
+                "rcausal_mgm standalone runs should point to an NMF-annotated h5ad; the raw cosmx_h5ad_path does not expose NMF_factor."
+            )
 
 
 def _apply_join_key_thresholds(
@@ -138,7 +256,15 @@ def validate_config(
         if not readable:
             errors.append(f"Path not readable: {key} -> {value}")
 
-    for key in REQUIRED_KEYS:
+    stages = config.get("stages") or ["cell2loc_nmf"]
+    if isinstance(stages, str):
+        stages = [item.strip() for item in stages.split(",") if item.strip()]
+    if not isinstance(stages, list):
+        errors.append("stages must be a list of stage names.")
+        stages = []
+
+    required_keys = list(RAW_STAGE_REQUIRED_KEYS if "cell2loc_nmf" in stages else ("cosmx_h5ad_path",))
+    for key in required_keys:
         if not config.get(key):
             errors.append(f"Missing required config key: {key}")
 
@@ -201,12 +327,6 @@ def validate_config(
     if slurm.get("enabled") and not slurm.get("conda_env"):
         warnings.append("slurm.enabled is true but slurm.conda_env is missing.")
 
-    stages = config.get("stages") or ["cell2loc_nmf"]
-    if isinstance(stages, str):
-        stages = [item.strip() for item in stages.split(",") if item.strip()]
-    if not isinstance(stages, list):
-        errors.append("stages must be a list of stage names.")
-        stages = []
     invalid = [stage for stage in stages if stage not in ALLOWED_STAGES]
     if invalid:
         errors.append(f"Invalid stages: {', '.join(invalid)}")
@@ -249,6 +369,8 @@ def validate_config(
         script_path = config.get("mlp_script_path", DEFAULT_MLP_SCRIPT)
         if check_paths and not resolve_repo_path(script_path).exists():
             errors.append(f"MLP script not found: {script_path}")
+
+    _validate_stage_data_contract(stages, config, check_paths, errors, warnings, checks)
 
     if check_paths and config.get("check_join_keys", True):
         join_delimiter = config.get("join_key_delimiter", "__")

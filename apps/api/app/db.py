@@ -106,6 +106,24 @@ def update_run(run_id: int, **fields: Any) -> None:
         conn.commit()
 
 
+def append_run_message(run_id: int, message: str, max_chars: int = 16000) -> None:
+    if not message:
+        return
+    run = fetch_run(run_id)
+    existing = str((run or {}).get("message") or "").strip()
+    incoming = message.strip()
+    if not incoming:
+        return
+    if incoming in existing:
+        return
+    if existing == incoming:
+        return
+    combined = f"{existing}\n\n{incoming}" if existing else incoming
+    if len(combined) > max_chars:
+        combined = combined[-max_chars:]
+    update_run(run_id, message=combined)
+
+
 def fetch_run(run_id: int) -> Optional[Dict[str, Any]]:
     with get_conn() as conn:
         cur = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,))

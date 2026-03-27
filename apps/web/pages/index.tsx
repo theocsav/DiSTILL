@@ -97,6 +97,7 @@ export default function Home() {
   const [kMax, setKMax] = useState(20);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [referencePath, setReferencePath] = useState("");
+  const [cosmxWithNmfPath, setCosmxWithNmfPath] = useState("");
   const [outputDir, setOutputDir] = useState("");
   const [refModelDir, setRefModelDir] = useState("");
   const [slurmTime, setSlurmTime] = useState("96h");
@@ -137,6 +138,13 @@ export default function Home() {
     }
     return DEFAULT_PAPER_STAGES;
   }, [runType, selectedPreset]);
+  const hasCell2Loc = stages.includes("cell2loc_nmf");
+  const hasPostNmf = stages.includes("post_nmf");
+  const hasRcausal = stages.includes("rcausal_mgm");
+  const hasMlp = stages.includes("mlp");
+  const needsRawInputs = hasCell2Loc;
+  const needsNmfArtifact = !hasCell2Loc && (hasPostNmf || hasRcausal);
+  const needsFeatureInputs = !hasCell2Loc && !hasPostNmf && !hasRcausal && hasMlp;
 
   const refreshRuns = useCallback(async () => {
     try {
@@ -202,6 +210,7 @@ export default function Home() {
     setSlurmCondaEnv((slurm.conda_env as string) || "");
 
     setReferencePath((selectedPreset.reference_h5ad_path as string) || "");
+    setCosmxWithNmfPath((selectedPreset.cosmx_with_nmf_path as string) || "");
     setOutputDir((selectedPreset.output_dir as string) || "");
     setRefModelDir((selectedPreset.ref_model_dir as string) || "");
   }, [selectedPreset]);
@@ -273,8 +282,14 @@ export default function Home() {
     }
 
     const resolvedReference = referencePath || (selectedPreset?.reference_h5ad_path as string);
-    if (resolvedReference) {
+    if (needsRawInputs && resolvedReference) {
       config.reference_h5ad_path = resolvedReference;
+    }
+    if (needsNmfArtifact && cosmxWithNmfPath) {
+      config.cosmx_with_nmf_path = cosmxWithNmfPath;
+      if (!selectedPreset?.rcausal_h5ad_path) {
+        config.rcausal_h5ad_path = cosmxWithNmfPath;
+      }
     }
 
     if (outputDir) {
@@ -600,10 +615,33 @@ export default function Home() {
                 <div>Notes: {selectedDataset?.notes || "-"}</div>
               </div>
             </div>
-            <div className="card stack tight inset">
+              <div className="card stack tight inset">
               <strong>Resolved paths</strong>
               <div>Spatial H5AD: {selectedDataset?.staged_path || "-"}</div>
               <div>Cell metadata: {selectedDataset?.cell_metadata_path || "-"}</div>
+              {needsNmfArtifact ? <div>Standalone NMF artifact: {cosmxWithNmfPath || "-"}</div> : null}
+            </div>
+            <div className="card stack tight inset">
+              <strong>Stage entry contract</strong>
+              {needsRawInputs ? (
+                <p className="muted">
+                  This run starts from raw spatial data. Provide a spatial h5ad, reference h5ad,
+                  and metadata with coordinates.
+                </p>
+              ) : needsNmfArtifact ? (
+                <p className="muted">
+                  This run starts mid-pipeline. Provide an NMF-annotated artifact such as
+                  <code> cosmx_with_nmf.h5ad </code>
+                  plus metadata if coordinates or morphology are not embedded.
+                </p>
+              ) : needsFeatureInputs ? (
+                <p className="muted">
+                  This run starts from derived feature tables or a previous run output, not raw
+                  uploads.
+                </p>
+              ) : (
+                <p className="muted">Stage requirements depend on the selected preset.</p>
+              )}
             </div>
           </div>
         ) : null}
@@ -669,13 +707,25 @@ export default function Home() {
             {showAdvanced ? (
               <div className="card inset">
                 <div className="row">
-                  <div>
-                    <label>Reference h5ad path</label>
-                    <input
-                      value={referencePath}
-                      onChange={(event) => setReferencePath(event.target.value)}
-                    />
-                  </div>
+                  {needsRawInputs ? (
+                    <div>
+                      <label>Reference h5ad path</label>
+                      <input
+                        value={referencePath}
+                        onChange={(event) => setReferencePath(event.target.value)}
+                      />
+                    </div>
+                  ) : null}
+                  {needsNmfArtifact ? (
+                    <div>
+                      <label>cosmx_with_nmf.h5ad path</label>
+                      <input
+                        value={cosmxWithNmfPath}
+                        onChange={(event) => setCosmxWithNmfPath(event.target.value)}
+                        placeholder="/blue/.../cosmx_with_nmf.h5ad"
+                      />
+                    </div>
+                  ) : null}
                   <div>
                     <label>Output dir</label>
                     <input value={outputDir} onChange={(event) => setOutputDir(event.target.value)} />
@@ -783,7 +833,10 @@ export default function Home() {
                 <div>Preset version: {presetVersion}</div>
                 <div>Preset: {selectedPreset?.label || selectedPreset?.id || "-"}</div>
                 <div>Dataset: {selectedDataset?.label || selectedDataset?.id || "-"}</div>
-                <div>Reference h5ad: {referencePath || selectedPreset?.reference_h5ad_path || "-"}</div>
+                {needsRawInputs ? (
+                  <div>Reference h5ad: {referencePath || selectedPreset?.reference_h5ad_path || "-"}</div>
+                ) : null}
+                {needsNmfArtifact ? <div>NMF artifact: {cosmxWithNmfPath || "-"}</div> : null}
                 <div>Output dir: {outputDir || selectedPreset?.output_dir || "-"}</div>
               </div>
 

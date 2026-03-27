@@ -25,10 +25,16 @@ def load_h5ad_schema(path: Path) -> dict:
     obs_keys = list(adata.obs_keys())
     has_raw_counts = adata.raw is not None
     gene_id_format = detect_gene_id_format(adata.var_names)
+    coordinate_columns = ["CenterX_global_px", "CenterY_global_px"]
+    morphology_columns = ["Area", "Width", "Height"]
+    nmf_columns = ["NMF_factor", "dominant_nmf_factor"]
     return {
         "obs_keys": obs_keys,
         "has_raw_counts": has_raw_counts,
         "gene_id_format": gene_id_format,
+        "has_spatial_coordinates": all(key in obs_keys for key in coordinate_columns),
+        "has_morphology": ("Area" in obs_keys) or ("Width" in obs_keys and "Height" in obs_keys),
+        "has_nmf_labels": any(key in obs_keys for key in nmf_columns),
     }
 
 
@@ -39,6 +45,14 @@ def load_metadata_columns(path: Path) -> list[str]:
         raise SystemExit("pandas is required to read metadata files. Activate the pipeline conda env.") from exc
     df = pd.read_csv(path, nrows=0)
     return list(df.columns)
+
+
+def summarize_metadata_columns(columns: list[str]) -> dict:
+    return {
+        "has_spatial_coordinates": all(key in columns for key in ("CenterX_global_px", "CenterY_global_px")),
+        "has_morphology": ("Area" in columns) or ("Width" in columns and "Height" in columns),
+        "has_join_keys": ("unique_cell_id" in columns) or all(key in columns for key in ("fov", "cell_ID")),
+    }
 
 
 def load_registry(path: Path) -> list[dict]:
@@ -85,6 +99,7 @@ def main() -> int:
         "recommended_preset": args.recommended_preset,
         "schema_manifest": manifest,
         "metadata_columns": metadata_columns,
+        "metadata_manifest": summarize_metadata_columns(metadata_columns),
     }
 
     if args.output:

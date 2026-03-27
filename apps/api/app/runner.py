@@ -72,7 +72,8 @@ def resolve_run_paths(run_name: str, config: Dict[str, Any]) -> tuple[Path, Path
 
 
 def prepare_run(run_name: str, config: Dict[str, Any], submit: bool) -> Tuple[str, str, str, Optional[str]]:
-    if SLURM_BACKEND == "ssh":
+    # Prepare-only runs must stay local so queue=false/submit=false never depends on ssh.
+    if submit and SLURM_BACKEND == "ssh":
         return _prepare_run_ssh(run_name, config, submit)
 
     return _prepare_run_local(run_name, config, submit)
@@ -212,9 +213,12 @@ def prepare_run_bundle(run_name: str, config: Dict[str, Any], remote_run_dir: Op
         raise FileNotFoundError("submit.sh not found after preparation")
     submit_script = submit_path.read_text(encoding="utf-8")
 
+    remote_output_dir = str(output_dir)
     if remote_run_dir:
         _rewrite_staged_paths(run_dir, str(run_dir).replace("\\", "/"), remote_run_dir.replace("\\", "/"))
         submit_script = submit_path.read_text(encoding="utf-8")
+        output_dir_str = str(output_dir).replace("\\", "/")
+        remote_output_dir = output_dir_str.replace(str(run_dir).replace("\\", "/"), remote_run_dir.replace("\\", "/"), 1)
 
     bundle_path = run_dir / "run_bundle.tar.gz"
     with tarfile.open(bundle_path, "w:gz") as tar:
@@ -226,7 +230,7 @@ def prepare_run_bundle(run_name: str, config: Dict[str, Any], remote_run_dir: Op
 
     return {
         "run_dir": str(run_dir),
-        "output_dir": str(output_dir),
+        "output_dir": remote_output_dir,
         "config_path": str(config_path),
         "bundle_path": str(bundle_path),
         "submit_script": submit_script,

@@ -182,7 +182,7 @@ def copy_resource(source: Path, run_dir: Path) -> Path:
 
 
 def build_papermill_command(input_path: Path, output_path: Path, parameters: dict) -> str:
-    cmd = f"papermill {shell_quote(input_path)} {shell_quote(output_path)}"
+    cmd = f"papermill {shell_quote(input_path)} {shell_quote(output_path)} -k python3"
     for key, value in parameters.items():
         if isinstance(value, str):
             rendered = value
@@ -513,6 +513,10 @@ def build_sbatch(run_dir, run_command, slurm, output_dir, run_name):
     if use_module_conda:
         lines.append("module load conda")
     if conda_env:
+        lines += [
+            "set +u",
+            'export MKL_INTERFACE_LAYER="${MKL_INTERFACE_LAYER:-LP64}"',
+        ]
         if use_module_conda:
             lines.append(f"conda activate {conda_env}")
         else:
@@ -531,6 +535,7 @@ def build_sbatch(run_dir, run_command, slurm, output_dir, run_name):
                 'source "$CONDA_BASE/etc/profile.d/conda.sh"',
                 f"conda activate {conda_env}",
             ]
+        lines.append("set -u")
     lines += [
         'echo "CONDA_BASE=${CONDA_BASE:-}"',
         'if command -v conda >/dev/null 2>&1; then conda info --base; conda info --envs; fi',
@@ -586,9 +591,13 @@ def main():
     if mode not in ("fixed_k", "elbow_k"):
         raise ValueError("mode must be 'fixed_k' or 'elbow_k'.")
 
-    ensure_required(config, "reference_h5ad_path")
-    ensure_required(config, "cosmx_h5ad_path")
-    ensure_required(config, "cell_metadata_path")
+    stages = normalize_stages(config)
+    if "cell2loc_nmf" in stages:
+        ensure_required(config, "reference_h5ad_path")
+        ensure_required(config, "cosmx_h5ad_path")
+        ensure_required(config, "cell_metadata_path")
+    elif "post_nmf" in stages or "rcausal_mgm" in stages:
+        ensure_required(config, "cosmx_h5ad_path")
 
     template_path = config.get("template_path")
     if not template_path:
@@ -641,7 +650,6 @@ def main():
     patched_script_path = run_dir_path / f"{run_name}_pipeline.py"
     write_text(patched_script_path, text)
 
-    stages = normalize_stages(config)
     stage_commands = []
 
     if "cell2loc_nmf" in stages:
@@ -657,7 +665,15 @@ def main():
                 raise FileNotFoundError(f"Post-NMF notebook not found: {notebook_source}")
             notebook_copy = copy_resource(notebook_source, run_dir_path)
             output_notebook = run_dir_path / f"{run_name}_post_nmf.ipynb"
-            parameters = {"output_dir": output_dir, "run_dir": str(run_dir_path)}
+            cosmx_with_nmf_path = config.get("cosmx_with_nmf_path") or str(Path(output_dir) / "cosmx_with_nmf.h5ad")
+            parameters = {
+                "OUTPUT_DIR": output_dir,
+                "RUN_DIR": str(run_dir_path),
+                "REFERENCE_H5AD": config.get("reference_h5ad_path", ""),
+                "COSMX_H5AD": config.get("cosmx_h5ad_path", ""),
+                "COSMX_WITH_NMF_H5AD": cosmx_with_nmf_path,
+                "CELL_METADATA_CSV": config.get("cell_metadata_path", ""),
+            }
             parameters.update(config.get("post_nmf_parameters", {}))
             stage_commands.append(
                 ("post_nmf", build_papermill_command(notebook_copy, output_notebook, parameters))
@@ -708,7 +724,16 @@ def main():
         script_copy = copy_resource(script_source, run_dir_path)
         args_list = config.get("mlp_args", [])
         extra_args = " ".join(shell_quote(arg) for arg in args_list)
-        stage_commands.append(("mlp", f"python {shell_quote(script_copy)} {extra_args}".strip()))
+        stage_commands.append(
+            (
+                "mlp",
+                (
+                    f"NICHERUNNER_OUTPUT_DIR={shell_quote(output_dir)} "
+                    f"NICHERUNNER_MLP_OUTPUT_DIR={shell_quote(str(Path(output_dir) / 'MLP_44Features'))} "
+                    f"python {shell_quote(script_copy)} {extra_args}"
+                ).strip(),
+            )
+        )
 
     report_script_path = None
     if "report" in stages:

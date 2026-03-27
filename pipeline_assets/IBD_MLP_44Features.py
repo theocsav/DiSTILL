@@ -57,7 +57,8 @@ from sklearn.preprocessing import StandardScaler
 from scipy.stats import loguniform
 
 # --- Define the output directory ---
-output_dir = "/blue/kejun.huang/tan.m/IBDCosMx_scRNAseq/CosMx/Post-NMF_Analysis/MLP_44Features"
+feature_input_dir = os.environ.get("NICHERUNNER_OUTPUT_DIR", "/blue/kejun.huang/tan.m/IBDCosMx_scRNAseq/CosMx/Post-NMF_Analysis")
+output_dir = os.environ.get("NICHERUNNER_MLP_OUTPUT_DIR", os.path.join(feature_input_dir, "MLP_44Features"))
 os.makedirs(output_dir, exist_ok=True)
 output_path = os.path.join(output_dir, 'mlp_results.txt')
 
@@ -68,7 +69,6 @@ sys.stdout = open(output_path, 'w')
 
 try:
     # --- Load the pre-calculated features and labels ---
-    feature_input_dir = "/blue/kejun.huang/tan.m/IBDCosMx_scRNAseq/CosMx/Post-NMF_Analysis"
     X = pd.read_parquet(os.path.join(feature_input_dir, 'reduced_features_final_15.parquet'))
     y = pd.read_parquet(os.path.join(feature_input_dir, 'targets_y.parquet')).squeeze()
     groups = pd.read_parquet(os.path.join(feature_input_dir, 'groups.parquet')).squeeze()
