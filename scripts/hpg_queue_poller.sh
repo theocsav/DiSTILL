@@ -139,6 +139,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+from typing import Optional
 
 active = json.load(open(sys.argv[1], encoding="utf-8")).get("items", [])
 api_base = sys.argv[2].rstrip("/")
@@ -217,7 +218,7 @@ def tail_lines(path: Path, max_lines: int) -> str:
         return "".join(deque(handle, max_lines)).strip()
 
 
-def candidate_logs_dir(run_name: str, output_dir: str) -> Path | None:
+def candidate_logs_dir(run_name: str, output_dir: str) -> Optional[Path]:
     candidates_dirs = []
     if output_dir:
         candidates_dirs.append(Path(output_dir) / "logs")
