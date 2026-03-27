@@ -40,6 +40,7 @@ def apply_dataset_registry(config: Dict[str, Any]) -> Dict[str, Any]:
     mapping = {
         "staged_path": "cosmx_h5ad_path",
         "cosmx_h5ad_path": "cosmx_h5ad_path",
+        "cosmx_with_nmf_path": "cosmx_with_nmf_path",
         "cell_metadata_path": "cell_metadata_path",
         "reference_h5ad_path": "reference_h5ad_path",
         "ref_model_dir": "ref_model_dir",

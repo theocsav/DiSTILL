@@ -1,17 +1,62 @@
 [
   {
-    "id": "ibd_cosmx_sample_a",
-    "label": "IBD CosMx Sample A",
+    "id": "ibd_cosmx_corrected",
+    "label": "IBD CosMx Corrected",
     "organ": "colon",
     "platform": "cosmx",
-    "staged_path": "/orange/kejun.huang/vasco.hinostroza/data/ibd/cosmx.h5ad",
-    "cell_metadata_path": "/orange/kejun.huang/vasco.hinostroza/data/ibd/cell_metadata.csv",
-    "recommended_preset": "ibd_cosmx_k4",
+    "staged_path": "/blue/kejun.huang/vasco.hinostroza/data/Corrected_CompleteCosMx.h5ad",
+    "cosmx_with_nmf_path": "/blue/kejun.huang/vasco.hinostroza/data/Corrected_CompleteCosMx.h5ad",
+    "recommended_preset": "ibd_cosmx_corrected_downstream",
+    "notes": "Downstream-ready corrected spatial h5ad with coordinates, morphology, and NMF labels embedded. Not suitable as the raw-count input for cell2loc_nmf.",
     "schema_manifest": {
-      "obs_keys": ["fov", "cell_ID", "patient", "disease_status"],
-      "has_raw_counts": true,
-      "gene_id_format": "ensembl"
+      "obs_keys": [
+        "cell_id",
+        "patient",
+        "subset",
+        "unique_cell_id",
+        "PredictedCellType",
+        "NMF_factor",
+        "fov",
+        "cell_ID",
+        "Area",
+        "AspectRatio",
+        "CenterX_local_px",
+        "CenterY_local_px",
+        "CenterX_global_px",
+        "CenterY_global_px",
+        "Width",
+        "Height",
+        "Mean.MembraneStain",
+        "Max.MembraneStain",
+        "Mean.PanCK",
+        "Max.PanCK",
+        "Mean.CD45",
+        "Max.CD45",
+        "Mean.CD3",
+        "Max.CD3",
+        "Mean.DAPI",
+        "Max.DAPI"
+      ],
+      "has_raw_counts": false,
+      "has_spatial_coordinates": true,
+      "has_morphology": true,
+      "has_nmf_labels": true,
+      "gene_id_format": "unknown"
     },
-    "metadata_columns": ["CenterX_global_px", "CenterY_global_px", "fov", "cell_ID"]
+    "metadata_manifest": {
+      "has_spatial_coordinates": true,
+      "has_morphology": true,
+      "has_join_keys": true
+    },
+    "metadata_columns": [
+      "CenterX_global_px",
+      "CenterY_global_px",
+      "fov",
+      "cell_ID",
+      "Area",
+      "Width",
+      "Height",
+      "unique_cell_id"
+    ]
   }
 ]

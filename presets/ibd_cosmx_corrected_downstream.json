@@ -1,0 +1,51 @@
+{
+  "id": "ibd_cosmx_corrected_downstream",
+  "label": "CosMx Corrected Downstream",
+  "organ": "colon",
+  "platform": "cosmx",
+  "run_name": "ibd_cosmx_corrected_downstream",
+  "mode": "fixed_k",
+  "n_components": 4,
+  "check_join_keys": false,
+  "cosmx_h5ad_path": "/blue/kejun.huang/vasco.hinostroza/data/Corrected_CompleteCosMx.h5ad",
+  "cosmx_with_nmf_path": "/blue/kejun.huang/vasco.hinostroza/data/Corrected_CompleteCosMx.h5ad",
+  "output_dir": "/blue/kejun.huang/vasco.hinostroza/nicherunner/runs/ibd_cosmx_corrected_downstream/outputs",
+  "stages": ["post_nmf", "rcausal_mgm", "mlp", "report"],
+  "post_nmf_mode": "papermill",
+  "post_nmf_notebook_path": "pipeline_assets/IBD_Post_NMF_Analysis.ipynb",
+  "rcausal_mode": "python",
+  "rcausal_script_path": "pipeline_assets/IBD_RCausalMGM_Preparation.py",
+  "rcausal_h5ad_path": "/blue/kejun.huang/vasco.hinostroza/data/Corrected_CompleteCosMx.h5ad",
+  "rcausal_niche_h5ad_path": "/blue/kejun.huang/vasco.hinostroza/data/Corrected_CompleteCosMx.h5ad",
+  "rcausal_neighborhood_h5ad_path": "/blue/kejun.huang/vasco.hinostroza/data/Corrected_CompleteCosMx.h5ad",
+  "mlp_script_path": "pipeline_assets/IBD_MLP_44Features.py",
+  "report_title": "NicheRunner Corrected Downstream Run",
+  "run_dir": "runs/ibd_cosmx_corrected_downstream",
+  "preflight_slurm": {
+    "time": "0-00:10:00",
+    "mem": "8gb",
+    "cpus_per_task": 2
+  },
+  "default_resources": {
+    "time": "24:00:00",
+    "cpus_per_task": 16,
+    "mem": "128gb",
+    "qos": "kejun.huang-b"
+  },
+  "default_params": {
+    "mode": "fixed_k",
+    "n_components": 4
+  },
+  "slurm": {
+    "enabled": true,
+    "job_name": "ibd_cosmx_corrected_downstream",
+    "account": "kejun.huang",
+    "time": "24:00:00",
+    "mem": "128gb",
+    "cpus_per_task": 16,
+    "qos": "kejun.huang-b",
+    "mail_user": "vasco.hinostroza@ufl.edu",
+    "mail_type": "ALL",
+    "conda_env": "/blue/kejun.huang/vasco.hinostroza/nicherunner/conda/envs/ibd_cosmx_k4"
+  }
+}

@@ -55,6 +55,7 @@ export type Preset = {
   path?: string;
   stages?: string[];
   run_name?: string;
+  cosmx_h5ad_path?: string;
   reference_h5ad_path?: string;
   output_dir?: string;
   ref_model_dir?: string;
@@ -107,6 +108,8 @@ export type Dataset = {
   organ?: string;
   platform?: string;
   staged_path?: string;
+  cosmx_with_nmf_path?: string;
+  reference_h5ad_path?: string;
   cell_metadata_path?: string;
   recommended_preset?: string;
   schema_manifest?: Record<string, unknown>;

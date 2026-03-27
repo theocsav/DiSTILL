@@ -14,7 +14,7 @@ ALLOWED_STAGES = ("cell2loc_nmf", "post_nmf", "rcausal_mgm", "mlp", "report")
 DEFAULT_POST_NMF_NOTEBOOK = "pipeline_assets/IBD_Post_NMF_Analysis.ipynb"
 DEFAULT_RCAUSAL_NOTEBOOK = "pipeline_assets/IBD_RCausalMGM_Preparation.ipynb"
 DEFAULT_MLP_SCRIPT = "pipeline_assets/IBD_MLP_44Features.py"
-DEFAULT_REQUIRED_OBS_KEYS = ("fov", "cell_ID", "patient", "disease_status")
+DEFAULT_REQUIRED_OBS_KEYS = ("fov", "patient")
 DEFAULT_REQUIRED_METADATA_COLUMNS = ("CenterX_global_px", "CenterY_global_px", "fov", "cell_ID")
 NMF_LABEL_COLUMNS = ("NMF_factor", "dominant_nmf_factor")
 COORD_COLUMNS = ("CenterX_global_px", "CenterY_global_px")
@@ -324,25 +324,33 @@ def validate_config(
             if not staged_path:
                 errors.append(f"Dataset {dataset_id} missing staged_path.")
 
+            manifest = dataset.get("schema_manifest", {})
+            metadata_manifest = dataset.get("metadata_manifest", {})
             metadata_path = dataset.get("cell_metadata_path")
-            if not metadata_path:
+            metadata_embedded = bool(manifest.get("has_spatial_coordinates")) and bool(manifest.get("has_morphology"))
+            metadata_required = "cell2loc_nmf" in stages and not metadata_embedded
+            if metadata_required and not metadata_path:
                 errors.append(f"Dataset {dataset_id} missing cell_metadata_path.")
 
-            manifest = dataset.get("schema_manifest", {})
             obs_keys = manifest.get("obs_keys", [])
-            required_obs_keys = config.get("required_obs_keys", DEFAULT_REQUIRED_OBS_KEYS)
+            required_obs_keys = tuple(config.get("required_obs_keys", DEFAULT_REQUIRED_OBS_KEYS))
             missing_obs = [key for key in required_obs_keys if key not in obs_keys]
             if missing_obs:
-                errors.append(f"Dataset missing obs keys: {', '.join(missing_obs)}")
+                warnings.append(f"Dataset manifest missing preferred obs keys: {', '.join(missing_obs)}")
             require_raw = config.get("require_raw_counts", True)
             if require_raw and manifest and not manifest.get("has_raw_counts", False):
-                errors.append("Dataset schema manifest reports no raw counts.")
+                if "cell2loc_nmf" in stages:
+                    errors.append("Dataset schema manifest reports no raw counts.")
+                else:
+                    warnings.append("Dataset schema manifest reports no raw counts.")
 
-            required_meta = config.get("required_metadata_columns", DEFAULT_REQUIRED_METADATA_COLUMNS)
+            required_meta = tuple(config.get("required_metadata_columns", DEFAULT_REQUIRED_METADATA_COLUMNS))
             metadata_columns = dataset.get("metadata_columns", [])
             missing_meta = [key for key in required_meta if key not in metadata_columns]
-            if missing_meta:
+            if missing_meta and metadata_required:
                 errors.append(f"Dataset metadata missing columns: {', '.join(missing_meta)}")
+            elif missing_meta and metadata_manifest:
+                warnings.append(f"Dataset metadata manifest omits columns: {', '.join(missing_meta)}")
 
     slurm = config.get("slurm", {})
     if slurm.get("enabled") and not slurm.get("conda_env"):
@@ -414,7 +422,10 @@ def validate_config(
             h5ad_value = config.get("cosmx_h5ad_path")
             metadata_value = config.get("cell_metadata_path")
             if not h5ad_value or not metadata_value:
-                raise RuntimeError("cosmx_h5ad_path and cell_metadata_path are required for join-key validation.")
+                if "cell2loc_nmf" in stages:
+                    raise RuntimeError("cosmx_h5ad_path and cell_metadata_path are required for join-key validation.")
+                checks["join_keys"] = {"status": "skipped", "reason": "cell_metadata_path not provided for downstream-only run."}
+                return errors, warnings, checks
             h5ad_path = Path(h5ad_value)
             metadata_path = Path(metadata_value)
             obs = _read_h5ad_obs(h5ad_path)
