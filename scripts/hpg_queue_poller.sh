@@ -13,6 +13,9 @@ POLLER_RUNS_DIR="${POLLER_RUNS_DIR:-/blue/kejun.huang/vasco.hinostroza/nicherunn
 LOG_TAIL_LINES="${LOG_TAIL_LINES:-200}"
 POLLER_API_RETRIES="${POLLER_API_RETRIES:-4}"
 POLLER_RETRY_DELAY_SECONDS="${POLLER_RETRY_DELAY_SECONDS:-3}"
+POLLER_SYNC_ENABLED="${POLLER_SYNC_ENABLED:-true}"
+POLLER_SYNC_MAX_FILE_MB="${POLLER_SYNC_MAX_FILE_MB:-50}"
+POLLER_SYNC_MAX_FILES="${POLLER_SYNC_MAX_FILES:-128}"
 
 if [[ -z "$API_BASE" || -z "$QUEUE_POLLER_TOKEN" ]]; then
   echo "API_BASE and QUEUE_POLLER_TOKEN are required." >&2
@@ -127,7 +130,7 @@ curl_retry -fsS -X POST \
 # Lightweight status sync for active jobs.
 active_json="$tmpdir/active.json"
 curl_retry -fsS -H "X-Queue-Token: $QUEUE_POLLER_TOKEN" "$API_BASE/queue/active" > "$active_json"
-python3 - <<'PY' "$active_json" "$API_BASE" "$QUEUE_POLLER_TOKEN" "$POLLER_RUNS_DIR" "$LOG_TAIL_LINES"
+python3 - <<'PY' "$active_json" "$API_BASE" "$QUEUE_POLLER_TOKEN" "$POLLER_RUNS_DIR" "$LOG_TAIL_LINES" "$POLLER_API_RETRIES" "$POLLER_RETRY_DELAY_SECONDS" "$POLLER_SYNC_ENABLED" "$POLLER_SYNC_MAX_FILE_MB" "$POLLER_SYNC_MAX_FILES"
 from collections import deque
 from pathlib import Path
 import json
@@ -142,6 +145,11 @@ api_base = sys.argv[2].rstrip("/")
 token = sys.argv[3]
 runs_dir = Path(sys.argv[4])
 log_tail_lines = max(1, int(sys.argv[5]))
+api_retries = max(1, int(sys.argv[6]))
+retry_delay = max(1, int(sys.argv[7]))
+sync_enabled = sys.argv[8].strip().lower() == "true"
+sync_max_file_bytes = max(1, int(float(sys.argv[9]) * 1024 * 1024))
+sync_max_files = max(1, int(sys.argv[10]))
 
 
 def map_state(state: str) -> str:
@@ -209,18 +217,20 @@ def tail_lines(path: Path, max_lines: int) -> str:
         return "".join(deque(handle, max_lines)).strip()
 
 
-def collect_log_tail(run_name: str, output_dir: str) -> str:
+def candidate_logs_dir(run_name: str, output_dir: str) -> Path | None:
     candidates_dirs = []
     if output_dir:
         candidates_dirs.append(Path(output_dir) / "logs")
     candidates_dirs.append(runs_dir / str(run_name) / "outputs" / "logs")
     candidates_dirs.append(runs_dir / str(run_name) / "output" / "logs")
-
-    logs_dir = None
     for candidate in candidates_dirs:
         if candidate.exists() and candidate.is_dir():
-            logs_dir = candidate
-            break
+            return candidate
+    return None
+
+
+def collect_log_tail(run_name: str, output_dir: str) -> str:
+    logs_dir = candidate_logs_dir(run_name, output_dir)
     if logs_dir is None:
         return ""
 
@@ -257,6 +267,105 @@ def collect_log_tail(run_name: str, output_dir: str) -> str:
     return message[:12000]
 
 
+def collect_sync_candidates(output_dir: str):
+    base = Path(output_dir)
+    if not output_dir or not base.exists() or not base.is_dir():
+        return [], [{"reason": "missing_output_dir", "path": output_dir}]
+
+    allowed_prefixes = {"logs", "report", "artifacts"}
+    allowed_root_suffixes = {".html", ".pdf", ".csv", ".tsv", ".parquet", ".json", ".txt", ".png", ".jpg", ".jpeg", ".svg", ".xlsx", ".xls"}
+    files = []
+    skipped = []
+
+    for path in sorted(base.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(base).as_posix()
+        parts = rel.split("/")
+        include = False
+        if parts[0] in allowed_prefixes:
+            include = True
+        elif len(parts) == 1 and path.suffix.lower() in allowed_root_suffixes:
+            include = True
+        if not include:
+            continue
+        size = path.stat().st_size
+        if size > sync_max_file_bytes:
+            skipped.append({"path": rel, "reason": "too_large", "size": size})
+            continue
+        files.append({"path": rel, "abs_path": path, "size": size})
+
+    if len(files) > sync_max_files:
+        for item in files[sync_max_files:]:
+            skipped.append({"path": item["path"], "reason": "over_limit", "size": item["size"]})
+        files = files[:sync_max_files]
+
+    return files, skipped
+
+
+def upload_synced_artifacts(run_id: str, run_name: str, output_dir: str, status: str):
+    files, skipped = collect_sync_candidates(output_dir)
+    if not files:
+        return {"ok": False, "error": "No eligible artifacts found for sync.", "skipped": skipped}
+
+    manifest = {
+        "run_id": run_id,
+        "run_name": run_name,
+        "status": status,
+        "output_dir": output_dir,
+        "files": [{"path": item["path"], "size": item["size"]} for item in files],
+        "skipped": skipped,
+    }
+    command = [
+        "curl",
+        "--retry",
+        str(api_retries),
+        "--retry-delay",
+        str(retry_delay),
+        "--retry-connrefused",
+        "--connect-timeout",
+        "15",
+        "--max-time",
+        "300",
+        "-fsS",
+        "-X",
+        "POST",
+        "-H",
+        f"X-Queue-Token: {token}",
+        "-F",
+        f"run_id={run_id}",
+        "-F",
+        f"manifest_json={json.dumps(manifest)}",
+    ]
+    for item in files:
+        command.extend(["-F", f"paths={item['path']}"])
+        command.extend(["-F", f"files=@{item['abs_path']};filename={Path(item['path']).name}"])
+    command.append(f"{api_base}/queue/report-artifacts")
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        return {"ok": False, "error": (result.stderr or result.stdout or "Artifact sync failed").strip()}
+    return {"ok": True, "count": len(files), "skipped": skipped}
+
+
+def report_status(payload: dict):
+    data = urllib.parse.urlencode(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"{api_base}/queue/report-status",
+        data=data,
+        headers={"X-Queue-Token": token},
+        method="POST",
+    )
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(req, timeout=20):
+                return True
+        except Exception:
+            if attempt == 3:
+                return False
+            time.sleep(2 ** attempt)
+    return False
+
+
 for item in active:
     run_id = item.get("run_id")
     run_name = str(item.get("run_name") or "").strip()
@@ -277,19 +386,15 @@ for item in active:
         "finished_at": info.get("finished_at", ""),
         "message": collect_log_tail(run_name, output_dir) if run_name else "",
     }
-    data = urllib.parse.urlencode(payload).encode("utf-8")
-    req = urllib.request.Request(
-        f"{api_base}/queue/report-status",
-        data=data,
-        headers={"X-Queue-Token": token},
-        method="POST",
-    )
-    for attempt in range(4):
-        try:
-            with urllib.request.urlopen(req, timeout=20):
-                break
-        except Exception:
-            if attempt == 3:
-                break
-            time.sleep(2 ** attempt)
+    report_status(payload)
+    if sync_enabled and payload["status"] in {"succeeded", "failed", "canceled", "error"}:
+        sync_result = upload_synced_artifacts(str(run_id), run_name, output_dir, payload["status"])
+        if not sync_result.get("ok"):
+            report_status(
+                {
+                    "run_id": str(run_id),
+                    "status": payload["status"],
+                    "message": f"Artifact sync failed: {sync_result.get('error', 'unknown error')}",
+                }
+            )
 PY

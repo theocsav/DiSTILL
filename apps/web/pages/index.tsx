@@ -66,6 +66,12 @@ function formatCheck(value: unknown) {
   if (value === false) {
     return { label: "fail", tone: "bad" as const };
   }
+  if (value === "unknown_external_poller") {
+    return { label: "unknown on HPG", tone: "muted" as const };
+  }
+  if (value === "missing") {
+    return { label: "missing", tone: "bad" as const };
+  }
   if (value === "skipped") {
     return { label: "skipped", tone: "muted" as const };
   }
@@ -888,7 +894,7 @@ export default function Home() {
 
                     {typeof preflightResult.checks === "object" ? (
                       <div className="preflight-grid">
-                        {(["exists", "roots", "permissions"] as const).map((key) => {
+                        {(["exists", "roots", "permissions", "compute_access"] as const).map((key) => {
                           const record = preflightResult.checks[key] as Record<string, unknown> | undefined;
                           if (!record) {
                             return null;
@@ -896,7 +902,13 @@ export default function Home() {
                           return (
                             <div key={key}>
                               <strong>{key}</strong>
+                              {key === "compute_access" && typeof record.summary === "string" ? (
+                                <p className="muted">{record.summary}</p>
+                              ) : null}
                               {Object.entries(record).map(([pathKey, value]) => {
+                                if (pathKey === "summary" || pathKey === "mode") {
+                                  return null;
+                                }
                                 const meta = formatCheck(value);
                                 return (
                                   <div key={pathKey} className={`check-row ${meta.tone}`}>
@@ -968,7 +980,7 @@ export default function Home() {
                       ) : null}
                       {typeof dryRunResult.checks === "object" ? (
                         <div className="preflight-grid">
-                          {(["exists", "roots", "permissions"] as const).map((key) => {
+                          {(["exists", "roots", "permissions", "compute_access"] as const).map((key) => {
                             const record = dryRunResult.checks[key] as Record<string, unknown> | undefined;
                             if (!record) {
                               return null;
@@ -976,7 +988,13 @@ export default function Home() {
                             return (
                               <div key={key}>
                                 <strong>{key}</strong>
+                                {key === "compute_access" && typeof record.summary === "string" ? (
+                                  <p className="muted">{record.summary}</p>
+                                ) : null}
                                 {Object.entries(record).map(([pathKey, value]) => {
+                                  if (pathKey === "summary" || pathKey === "mode") {
+                                    return null;
+                                  }
                                   const meta = formatCheck(value);
                                   return (
                                     <div key={pathKey} className={`check-row ${meta.tone}`}>

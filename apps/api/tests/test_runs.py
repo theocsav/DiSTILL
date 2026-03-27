@@ -1,10 +1,12 @@
 import os
 import importlib
+import io
 import json
 import sys
 import types
+import asyncio
 from pathlib import Path
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
 
 from fastapi.testclient import TestClient
 
@@ -339,3 +341,105 @@ def test_queue_claim_bundle_submission_and_status_append(tmp_path: Path, monkeyp
         assert "second" in (run_body["message"] or "")
         bundle_path = Path(tmp_path / "run_bundle.tar.gz")
         assert not bundle_path.exists()
+
+        sync = asyncio.run(
+            main.queue_report_artifacts(
+                run_id=run_id,
+                manifest_json=json.dumps({"source": "test"}),
+                paths=[
+                    "logs/cell2loc_nmf.err",
+                    "artifacts/run_summary.json",
+                    "report/report.html",
+                ],
+                files=[
+                    UploadFile(
+                        filename="cell2loc_nmf.err",
+                        file=io.BytesIO(b"line one\nline two\n"),
+                        headers={"content-type": "text/plain"},
+                    ),
+                    UploadFile(
+                        filename="run_summary.json",
+                        file=io.BytesIO(
+                            json.dumps(
+                                {
+                                    "generated_at": "2026-01-01T00:00:00Z",
+                                    "run_name": "queue-e2e",
+                                    "output_dir": "/blue/group/user/runs/queue-e2e/outputs",
+                                    "stages": ["cell2loc_nmf", "report"],
+                                    "report_path": "report/report.html",
+                                    "manifest_path": "artifacts/manifest.json",
+                                    "figures_count": 0,
+                                    "tables_count": 0,
+                                }
+                            ).encode("utf-8")
+                        ),
+                        headers={"content-type": "application/json"},
+                    ),
+                    UploadFile(
+                        filename="report.html",
+                        file=io.BytesIO(b"<html><body>ok</body></html>"),
+                        headers={"content-type": "text/html"},
+                    ),
+                ],
+            )
+        )
+        assert sync["count"] == 3
+
+        artifact_list = client.get(f"/runs/{run_id}/artifacts")
+        assert artifact_list.status_code == 200
+        artifact_paths = [item["path"] for item in artifact_list.json()["items"]]
+        assert "logs/cell2loc_nmf.err" in artifact_paths
+        assert "artifacts/run_summary.json" in artifact_paths
+        assert "report/report.html" in artifact_paths
+
+        logs = client.get(f"/runs/{run_id}/logs")
+        assert logs.status_code == 200
+        assert "line one" in logs.json()["content"]
+
+        summary = client.get(f"/runs/{run_id}/summary")
+        assert summary.status_code == 200
+        assert summary.json()["report_path"] == "report/report.html"
+
+        artifact = client.get(f"/runs/{run_id}/artifact", params={"path": "report/report.html"})
+        assert artifact.status_code == 200
+        assert "ok" in artifact.text
+
+        duplicate_submission = main.queue_report_submission(
+            run_id=run_id,
+            claim_id=body["job"]["claim_id"],
+            slurm_job_id="12345",
+            message="Submitted by HPG poller",
+        )
+        assert duplicate_submission["ok"] is True
+        assert duplicate_submission["idempotent"] is True
+
+
+def test_synced_artifact_cleanup_enforces_retention_and_quota(tmp_path: Path) -> None:
+    client = create_client(tmp_path)
+
+    from app import synced_artifacts
+
+    importlib.reload(synced_artifacts)
+
+    root = synced_artifacts.synced_root(1)
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "logs").mkdir(parents=True, exist_ok=True)
+    (root / "logs" / "stage.err").write_bytes(b"x" * 1024)
+    (root / ".sync_manifest.json").write_text(
+        json.dumps({"synced_at": "2020-01-01T00:00:00+00:00"}),
+        encoding="utf-8",
+    )
+
+    newer = synced_artifacts.synced_root(2)
+    newer.mkdir(parents=True, exist_ok=True)
+    (newer / "report").mkdir(parents=True, exist_ok=True)
+    (newer / "report" / "report.html").write_bytes(b"y" * 2048)
+    (newer / ".sync_manifest.json").write_text(
+        json.dumps({"synced_at": "2030-01-01T00:00:00+00:00"}),
+        encoding="utf-8",
+    )
+
+    result = synced_artifacts.cleanup_synced_artifacts(retention_days=1, max_total_gb=0.000001)
+
+    assert result["removed_dirs"] >= 1
+    assert not root.exists()

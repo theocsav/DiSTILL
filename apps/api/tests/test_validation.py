@@ -16,7 +16,8 @@ def _base_config() -> dict:
     }
 
 
-def test_post_nmf_standalone_requires_nmf_artifact_when_cell2loc_not_selected() -> None:
+def test_post_nmf_standalone_requires_nmf_artifact_when_cell2loc_not_selected(monkeypatch) -> None:
+    monkeypatch.setattr("app.validation.QUEUE_POLLER_TOKEN", "")
     errors, warnings, checks = validate_config(_base_config(), check_paths=False)
 
     assert any("post_nmf without cell2loc_nmf requires cosmx_with_nmf_path" in error for error in errors)
@@ -85,6 +86,7 @@ def test_stage_data_contract_uses_dataset_manifest_without_reading_files(monkeyp
 
     monkeypatch.setattr("app.validation._read_h5ad_obs", fail_read)
     monkeypatch.setattr("app.validation._read_metadata_header", fail_read)
+    monkeypatch.setattr("app.validation.QUEUE_POLLER_TOKEN", "")
 
     errors, warnings, checks = validate_config(config, check_paths=False)
 
@@ -92,3 +94,30 @@ def test_stage_data_contract_uses_dataset_manifest_without_reading_files(monkeyp
     assert not any("morphology" in error for error in errors)
     assert warnings == []
     assert checks["stage_data_contract"]["metadata_columns"] == ["fov", "cell_ID", "CenterX_global_px", "CenterY_global_px", "Area"]
+
+
+def test_validation_surfaces_external_poller_compute_access_as_unknown(tmp_path: Path, monkeypatch) -> None:
+    config = {
+        "run_name": "validation-demo",
+        "mode": "fixed_k",
+        "n_components": 4,
+        "stages": ["cell2loc_nmf"],
+        "cosmx_h5ad_path": str(tmp_path / "cosmx.h5ad"),
+        "reference_h5ad_path": str(tmp_path / "reference.h5ad"),
+        "cell_metadata_path": str(tmp_path / "metadata.csv"),
+        "check_join_keys": False,
+    }
+    for name in ("cosmx.h5ad", "reference.h5ad", "metadata.csv"):
+        (tmp_path / name).write_text("stub", encoding="utf-8")
+
+    monkeypatch.setattr("app.validation.ARTIFACT_ROOTS", [tmp_path])
+    monkeypatch.setattr("app.validation.QUEUE_POLLER_TOKEN", "poller-token")
+    monkeypatch.setattr("app.validation.remote_path_exists", lambda _path: True)
+    monkeypatch.setattr("app.validation.os.access", lambda _path, _mode: True)
+
+    errors, warnings, checks = validate_config(config, check_paths=True)
+
+    assert not errors
+    assert any("do not confirm HPG compute readability" in item for item in warnings)
+    assert checks["compute_access"]["mode"] == "external_poller"
+    assert checks["compute_access"]["cosmx_h5ad_path"] == "unknown_external_poller"

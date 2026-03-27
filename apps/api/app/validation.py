@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .registry import get_dataset
-from .settings import ARTIFACT_ROOTS, REPO_ROOT
+from .settings import ARTIFACT_ROOTS, QUEUE_POLLER_TOKEN, REPO_ROOT
 from .ssh_exec import is_ssh_backend, remote_path_exists, remote_path_readable
 from .storage import enforce_allowed_path
 
@@ -221,7 +221,18 @@ def validate_config(
 ) -> Tuple[List[str], List[str], Dict[str, Any]]:
     errors: List[str] = []
     warnings: List[str] = []
-    checks: Dict[str, Any] = {"exists": {}, "roots": {}, "permissions": {}}
+    checks: Dict[str, Any] = {"exists": {}, "roots": {}, "permissions": {}, "compute_access": {}}
+    if is_ssh_backend():
+        checks["compute_access"]["mode"] = "ssh_backend"
+        checks["compute_access"]["summary"] = "API path checks run against the compute environment over SSH."
+    elif QUEUE_POLLER_TOKEN:
+        checks["compute_access"]["mode"] = "external_poller"
+        checks["compute_access"]["summary"] = (
+            "API path checks reflect API-host visibility only; they do not confirm HPG compute readability."
+        )
+    else:
+        checks["compute_access"]["mode"] = "local"
+        checks["compute_access"]["summary"] = "API path checks reflect the local execution host."
 
     def record_path_checks(key: str, value: Optional[str]) -> None:
         if not value:
@@ -237,6 +248,7 @@ def validate_config(
         if not check_paths:
             checks["exists"][key] = "skipped"
             checks["permissions"][key] = "skipped"
+            checks["compute_access"][key] = "skipped"
             return
 
         exists_result = remote_path_exists(value)
@@ -245,16 +257,25 @@ def validate_config(
         if not exists:
             errors.append(f"Path does not exist: {key} -> {value}")
             checks["permissions"][key] = "skipped"
+            checks["compute_access"][key] = "missing"
             return
 
         if is_ssh_backend():
             readable_result = remote_path_readable(value)
             readable = bool(readable_result)
+            compute_value: Any = readable
         else:
             readable = os.access(path, os.R_OK)
+            compute_value = "unknown_external_poller" if QUEUE_POLLER_TOKEN else readable
         checks["permissions"][key] = readable
+        checks["compute_access"][key] = compute_value
         if not readable:
             errors.append(f"Path not readable: {key} -> {value}")
+
+    if QUEUE_POLLER_TOKEN and not is_ssh_backend():
+        warnings.append(
+            "API-host path checks do not confirm HPG compute readability in external poller mode; verify dataset paths on HPG or run an HPG smoke test."
+        )
 
     stages = config.get("stages") or ["cell2loc_nmf"]
     if isinstance(stages, str):

@@ -108,17 +108,28 @@ from .settings import (
     QUEUE_CLAIM_LEASE_SECONDS,
     QUEUE_POLLER_TOKEN,
     QUEUE_REMOTE_RUNS_DIR,
+    SYNCED_ARTIFACT_RETENTION_DAYS,
+    SYNCED_ARTIFACT_MAX_TOTAL_GB,
     validate_settings,
 )
 from .slurm import cancel_job
 from .logging import configure_logging
 from .worker import loop as worker_loop
 from .storage import enforce_allowed_path, list_artifacts, safe_join
+from .synced_artifacts import (
+    cleanup_synced_artifacts,
+    find_synced_log,
+    has_synced_artifacts,
+    read_sync_manifest,
+    replace_synced_artifacts,
+    synced_root,
+)
 from .validation import validate_config
 from .ssh_exec import run_command, remote_path_exists
 
 logger = logging.getLogger(__name__)
 VALID_RUN_STATUSES = {"created", "queued", "prepared", "submitted", "running", "succeeded", "failed", "canceled", "error", "unknown"}
+TERMINAL_RUN_STATUSES = {"succeeded", "failed", "canceled", "error"}
 
 
 def require_queue_poller(x_queue_token: Optional[str] = Header(default=None, alias="X-Queue-Token")) -> None:
@@ -128,14 +139,21 @@ def require_queue_poller(x_queue_token: Optional[str] = Header(default=None, ali
         raise HTTPException(status_code=401, detail="Invalid queue poller token")
 
 
-def upload_cleanup_loop() -> None:
+def maintenance_loop() -> None:
     while True:
         try:
             result = cleanup_stale_uploads(UPLOAD_SESSION_TTL_HOURS)
             if result.get("removed_sessions", 0) > 0:
                 logger.info("Upload cleanup removed %s stale sessions", result["removed_sessions"])
+            sync_result = cleanup_synced_artifacts(SYNCED_ARTIFACT_RETENTION_DAYS, SYNCED_ARTIFACT_MAX_TOTAL_GB)
+            if sync_result.get("removed_dirs", 0) > 0:
+                logger.info(
+                    "Synced artifact cleanup removed %s dirs (%s bytes)",
+                    sync_result["removed_dirs"],
+                    sync_result["removed_bytes"],
+                )
         except Exception as exc:
-            logger.exception("Upload cleanup loop failed: %s", exc)
+            logger.exception("Maintenance loop failed: %s", exc)
         time.sleep(UPLOAD_CLEANUP_INTERVAL_SECONDS)
 
 
@@ -148,7 +166,7 @@ async def lifespan(_app: FastAPI):
         thread = threading.Thread(target=worker_loop, daemon=True)
         thread.start()
     if UPLOAD_CLEANUP_ENABLED:
-        cleanup_thread = threading.Thread(target=upload_cleanup_loop, daemon=True)
+        cleanup_thread = threading.Thread(target=maintenance_loop, daemon=True)
         cleanup_thread.start()
     yield
 
@@ -576,10 +594,16 @@ def queue_report_submission(
     message: str = Form(default="Submitted by HPG poller"),
 ) -> dict:
     ok = complete_claim(run_id, claim_id)
+    run = fetch_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found.")
     if not ok:
+        if str(run.get("job_id") or "") == slurm_job_id and run.get("status") in {"submitted", "running", "succeeded", "failed", "canceled", "error", "unknown"}:
+            if message:
+                append_run_message(run_id, f"Duplicate submission callback acknowledged: {message}")
+            return {"ok": True, "idempotent": True}
         raise HTTPException(status_code=409, detail="Claim is invalid or expired.")
     update_run(run_id, status="submitted", job_id=slurm_job_id, message=message)
-    run = fetch_run(run_id)
     if run and run.get("config_path"):
         bundle_path = Path(str(run["config_path"])).parent / "run_bundle.tar.gz"
         bundle_path.unlink(missing_ok=True)
@@ -617,6 +641,34 @@ def queue_report_status(
     if message:
         append_run_message(run_id, message)
     return {"ok": True}
+
+
+@app.post("/queue/report-artifacts", dependencies=[Depends(require_queue_poller)])
+async def queue_report_artifacts(
+    run_id: int = Form(...),
+    manifest_json: str = Form(default=""),
+    paths: list[str] = Form(default=[]),
+    files: list[UploadFile] = File(default=[]),
+) -> dict:
+    run = fetch_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    if not files:
+        raise HTTPException(status_code=400, detail="At least one artifact file is required.")
+    try:
+        items = await replace_synced_artifacts(run_id, files, paths, manifest_json=manifest_json)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    sync_info = read_sync_manifest(run_id) or {}
+    if run.get("status") in TERMINAL_RUN_STATUSES:
+        append_run_message(run_id, f"Synced {len(items)} artifacts to API storage.")
+    return {
+        "ok": True,
+        "root": str(synced_root(run_id)),
+        "count": len(items),
+        "items": items,
+        "sync_manifest": sync_info,
+    }
 
 
 @app.get("/queue/active", dependencies=[Depends(require_queue_poller)])
@@ -970,30 +1022,46 @@ def read_tail(path: Path, max_bytes: int = 65536) -> str:
     return data.decode("utf-8", errors="replace")
 
 
+def _resolve_output_root(run: dict) -> Path:
+    output_dir = run.get("output_dir")
+    if not output_dir:
+        raise HTTPException(status_code=400, detail="Run has no output_dir")
+    output_path = Path(output_dir)
+    enforce_allowed_path(output_path, ARTIFACT_ROOTS)
+    return output_path
+
+
+def _artifact_root_for_run(run: dict) -> Path:
+    run_id = int(run["id"])
+    if has_synced_artifacts(run_id):
+        return synced_root(run_id)
+    return _resolve_output_root(run)
+
+
 @app.get("/runs/{run_id}/logs", dependencies=[Depends(require_session)])
 def get_logs(run_id: int, path: Optional[str] = Query(default=None)) -> dict:
     run = fetch_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
-    output_dir = run.get("output_dir")
-    if not output_dir:
-        raise HTTPException(status_code=400, detail="Run has no output_dir")
-
-    output_path = Path(output_dir)
-    try:
-        enforce_allowed_path(output_path, ARTIFACT_ROOTS)
-    except ValueError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    if path:
-        try:
-            log_path = safe_join(output_path, path)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid log path") from exc
-    else:
-        candidates = list(output_path.glob("*.out")) + list(output_path.glob("*.err"))
-        if not candidates:
-            raise HTTPException(status_code=404, detail="No log files found")
-        log_path = max(candidates, key=lambda p: p.stat().st_mtime)
+    run_id_int = int(run["id"])
+    log_path = find_synced_log(run_id_int, path)
+    if log_path is None:
+        output_path = _resolve_output_root(run)
+        if path:
+            try:
+                log_path = safe_join(output_path, path)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="Invalid log path") from exc
+        else:
+            direct_candidates = list(output_path.glob("*.out")) + list(output_path.glob("*.err"))
+            nested_logs = []
+            logs_dir = output_path / "logs"
+            if logs_dir.exists() and logs_dir.is_dir():
+                nested_logs = list(logs_dir.glob("*.out")) + list(logs_dir.glob("*.err"))
+            candidates = direct_candidates + nested_logs
+            if not candidates:
+                raise HTTPException(status_code=404, detail="No log files found")
+            log_path = max(candidates, key=lambda p: p.stat().st_mtime)
 
     if not log_path.exists():
         raise HTTPException(status_code=404, detail="Log file not found")
@@ -1006,15 +1074,7 @@ def get_artifacts(run_id: int, path: Optional[str] = Query(default="")) -> dict:
     run = fetch_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
-    output_dir = run.get("output_dir")
-    if not output_dir:
-        raise HTTPException(status_code=400, detail="Run has no output_dir")
-
-    base = Path(output_dir)
-    try:
-        enforce_allowed_path(base, ARTIFACT_ROOTS)
-    except ValueError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    base = _artifact_root_for_run(run)
     return {"items": list_artifacts(base, path)}
 
 
@@ -1023,15 +1083,7 @@ def get_artifact(run_id: int, path: str = Query(...)) -> FileResponse:
     run = fetch_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
-    output_dir = run.get("output_dir")
-    if not output_dir:
-        raise HTTPException(status_code=400, detail="Run has no output_dir")
-
-    base = Path(output_dir)
-    try:
-        enforce_allowed_path(base, ARTIFACT_ROOTS)
-    except ValueError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    base = _artifact_root_for_run(run)
     try:
         file_path = safe_join(base, path)
     except ValueError as exc:
@@ -1047,15 +1099,7 @@ def get_run_summary(run_id: int) -> dict:
     run = fetch_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
-    output_dir = run.get("output_dir")
-    if not output_dir:
-        raise HTTPException(status_code=400, detail="Run has no output_dir")
-
-    base = Path(output_dir)
-    try:
-        enforce_allowed_path(base, ARTIFACT_ROOTS)
-    except ValueError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    base = _artifact_root_for_run(run)
     try:
         summary_path = safe_join(base, "artifacts/run_summary.json")
     except ValueError as exc:

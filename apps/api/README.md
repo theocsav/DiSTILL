@@ -113,6 +113,8 @@ You can override SLURM resources for fallback checks with `preflight_slurm` in t
 
 Preflight join-key results are cached by `(dataset_id, manifest_hash, preset_id)` for a short TTL to avoid re-reading large h5ad files. Set `PREFLIGHT_CACHE_TTL_SECONDS`.
 
+In external HPG poller mode, preflight also returns a `compute_access` block distinct from API-host `exists` / `permissions`. This makes it explicit when a path is visible to the Oracle VM but still unverified on HPG.
+
 ## Dry run
 
 Use `POST /runs/dry-run` to validate a config and generate the pipeline scripts without creating a run record or submitting a job.
@@ -187,6 +189,8 @@ The report stage writes `artifacts/run_summary.json`. Fetch it via:
 GET /runs/{run_id}/summary
 ```
 
+In the external HPG poller deployment, the UI can read artifacts from poller-synced storage on the API host even when `output_dir` points to an HPG path the VM cannot mount directly. The poller uploads a curated subset of files from `logs/`, `report/`, and `artifacts/` after terminal states.
+
 ## Environment
 
 - `BASIC_AUTH_USER` / `BASIC_AUTH_PASS` (login credentials; required unless `AUTH_PASSWORD_HASH` is set; do not use `admin`/`admin`)
@@ -195,7 +199,8 @@ GET /runs/{run_id}/summary
 - `SESSION_TTL_MINUTES`, `COOKIE_NAME`, `COOKIE_SECURE`, `COOKIE_SAMESITE`
 - `CSRF_COOKIE_NAME`, `CSRF_HEADER_NAME`
 - `ALLOWED_ORIGINS` (comma-separated)
-- `RUNS_DIR`, `PRESETS_DIR`, `DB_PATH`, `ARTIFACT_ROOTS`
+- `RUNS_DIR`, `PRESETS_DIR`, `DB_PATH`, `ARTIFACT_ROOTS`, `SYNCED_ARTIFACTS_DIR`
+- `SYNCED_ARTIFACT_RETENTION_DAYS`, `SYNCED_ARTIFACT_MAX_TOTAL_GB`
 - `DATASETS_REGISTRY_PATH`
 - `PREFLIGHT_SLURM_FALLBACK`, `PREFLIGHT_SLURM_TIMEOUT_SECONDS`, `PREFLIGHT_SLURM_POLL_SECONDS`
 - `PREFLIGHT_CACHE_TTL_SECONDS`
@@ -206,6 +211,7 @@ GET /runs/{run_id}/summary
 - `RUN_RETENTION_DAYS`, `CLEANUP_INTERVAL_SECONDS`
 - `DISK_WARN_FREE_GB`, `DISK_WARN_PERCENT`
 - `PREFLIGHT_CHECK_PATHS` (default true)
+- poller-only knobs: `POLLER_SYNC_ENABLED`, `POLLER_SYNC_MAX_FILE_MB`, `POLLER_SYNC_MAX_FILES`
 
 Set `RUN_RETENTION_DAYS=0` to disable cleanup.
 
@@ -213,7 +219,9 @@ When using the external HPG queue poller from an Oracle VM deployment:
 
 - set `WORKER_ENABLED=false` on the VM
 - set `QUEUE_REMOTE_RUNS_DIR` to the HPG runs root used by the poller, for example `/blue/<group>/<user>/nicherunner/runs`
+- keep `SYNCED_ARTIFACTS_DIR` on VM-local storage under `ARTIFACT_ROOTS`; default is `RUNS_DIR/_synced_artifacts`
 - do not rely on `SSH_REMOTE_RUNS_DIR` unless you are also using the SSH backend
+- the poller should call `/queue/report-artifacts` after terminal states so `/runs/{id}/logs`, `/artifacts`, `/artifact`, and `/summary` keep working without a shared mount
 
 ## Worker
 

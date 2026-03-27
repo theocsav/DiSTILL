@@ -35,6 +35,9 @@ ARTIFACT_ROOTS = [
     for value in os.environ.get("ARTIFACT_ROOTS", str(RUNS_DIR)).split(",")
     if value.strip()
 ]
+SYNCED_ARTIFACTS_DIR = Path(
+    os.environ.get("SYNCED_ARTIFACTS_DIR", str(RUNS_DIR / "_synced_artifacts"))
+).resolve()
 WORKER_ENABLED = os.environ.get("WORKER_ENABLED", "false").lower() == "true"
 WORKER_POLL_SECONDS = int(os.environ.get("WORKER_POLL_SECONDS", "10"))
 QUEUE_ENABLED = os.environ.get("QUEUE_ENABLED", "true").lower() == "true"
@@ -77,6 +80,8 @@ UPLOAD_MAX_SIZE_REFERENCE_GB = float(os.environ.get("UPLOAD_MAX_SIZE_REFERENCE_G
 UPLOAD_ALLOWED_EXT_STAGED = os.environ.get("UPLOAD_ALLOWED_EXT_STAGED", ".h5ad")
 UPLOAD_ALLOWED_EXT_METADATA = os.environ.get("UPLOAD_ALLOWED_EXT_METADATA", ".csv,.tsv,.gz")
 UPLOAD_ALLOWED_EXT_REFERENCE = os.environ.get("UPLOAD_ALLOWED_EXT_REFERENCE", ".h5ad")
+SYNCED_ARTIFACT_RETENTION_DAYS = int(os.environ.get("SYNCED_ARTIFACT_RETENTION_DAYS", "14"))
+SYNCED_ARTIFACT_MAX_TOTAL_GB = float(os.environ.get("SYNCED_ARTIFACT_MAX_TOTAL_GB", "20"))
 
 
 def validate_settings() -> None:
@@ -95,6 +100,8 @@ def validate_settings() -> None:
         raise RuntimeError("RUNS_DIR must be an absolute path.")
     if not DATA_UPLOADS_DIR.is_absolute():
         raise RuntimeError("DATA_UPLOADS_DIR must be an absolute path.")
+    if not SYNCED_ARTIFACTS_DIR.is_absolute():
+        raise RuntimeError("SYNCED_ARTIFACTS_DIR must be an absolute path.")
     if UPLOAD_SESSION_TTL_HOURS <= 0:
         raise RuntimeError("UPLOAD_SESSION_TTL_HOURS must be > 0.")
     if UPLOAD_CLEANUP_INTERVAL_SECONDS <= 0:
@@ -103,6 +110,10 @@ def validate_settings() -> None:
         raise RuntimeError("UPLOAD_MAX_CONCURRENT_PER_USER must be > 0.")
     if min(UPLOAD_MAX_SIZE_STAGED_GB, UPLOAD_MAX_SIZE_METADATA_GB, UPLOAD_MAX_SIZE_REFERENCE_GB) <= 0:
         raise RuntimeError("Upload max size limits must be > 0.")
+    if SYNCED_ARTIFACT_RETENTION_DAYS < 0:
+        raise RuntimeError("SYNCED_ARTIFACT_RETENTION_DAYS must be >= 0.")
+    if SYNCED_ARTIFACT_MAX_TOTAL_GB <= 0:
+        raise RuntimeError("SYNCED_ARTIFACT_MAX_TOTAL_GB must be > 0.")
     if SLURM_BACKEND not in {"local", "ssh"}:
         raise RuntimeError("SLURM_BACKEND must be 'local' or 'ssh'.")
     if SLURM_BACKEND == "ssh":
@@ -121,3 +132,4 @@ def validate_settings() -> None:
             raise RuntimeError("ARTIFACT_ROOTS must contain absolute paths.")
     enforce_allowed_path(RUNS_DIR, ARTIFACT_ROOTS)
     enforce_allowed_path(DATA_UPLOADS_DIR, ARTIFACT_ROOTS)
+    enforce_allowed_path(SYNCED_ARTIFACTS_DIR, ARTIFACT_ROOTS)

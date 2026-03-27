@@ -44,6 +44,8 @@ def list_artifacts(base: Path, subpath: str = "", max_depth: int = 4) -> List[Di
         except PermissionError:
             return
         for entry in entries:
+            if entry.name.startswith("."):
+                continue
             if entry.is_dir():
                 if depth < max_depth:
                     walk(entry, depth + 1)
