@@ -716,68 +716,6 @@ def queue_active_runs() -> dict:
     return {"ok": True, "items": active}
 
 
-@app.get("/runs/{run_id}", response_model=RunResponse, dependencies=[Depends(require_session)])
-def get_run(run_id: int) -> dict:
-    run = fetch_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
-    return run
-
-
-@app.post(
-    "/runs/{run_id}/share",
-    response_model=ShareRunLinkResponse,
-    dependencies=[Depends(require_session), Depends(require_csrf)],
-)
-def create_share_link(
-    run_id: int,
-    payload: ShareRunLinkRequest,
-    request: Request,
-) -> dict:
-    run = fetch_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
-    ttl_hours = payload.expires_hours or PUBLIC_PROGRESS_TTL_HOURS
-    token = create_progress_token(run_id, ttl_hours)
-    expires_at = datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
-    origin = str(request.base_url).rstrip("/")
-    return {
-        "run_id": run_id,
-        "token": token,
-        "url": f"{origin}/progress/{token}",
-        "expires_at": expires_at.isoformat(),
-    }
-
-
-@app.get("/public/runs/progress", response_model=PublicRunProgressResponse)
-def public_run_progress(token: str = Query(..., min_length=16)) -> dict:
-    payload = verify_progress_token(token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    run = fetch_run(int(payload["run_id"]))
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
-    fields = (
-        "id",
-        "run_name",
-        "status",
-        "stage",
-        "job_id",
-        "slurm_state",
-        "slurm_reason",
-        "slurm_exit_code",
-        "slurm_exit_signal",
-        "slurm_elapsed",
-        "submitted_at",
-        "started_at",
-        "finished_at",
-        "message",
-        "created_at",
-        "updated_at",
-    )
-    return {key: run.get(key) for key in fields}
-
-
 def _validate_config_payload(
     config: dict,
     check_paths: bool,
@@ -846,6 +784,68 @@ def preflight(payload: PreflightRequest) -> dict:
     errors, warnings, checks = _validate_config_payload(config, payload.check_paths, payload.preset_path)
 
     return {"ok": not errors, "errors": errors, "warnings": warnings, "checks": checks}
+
+
+@app.get("/runs/{run_id}", response_model=RunResponse, dependencies=[Depends(require_session)])
+def get_run(run_id: int) -> dict:
+    run = fetch_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run
+
+
+@app.post(
+    "/runs/{run_id}/share",
+    response_model=ShareRunLinkResponse,
+    dependencies=[Depends(require_session), Depends(require_csrf)],
+)
+def create_share_link(
+    run_id: int,
+    payload: ShareRunLinkRequest,
+    request: Request,
+) -> dict:
+    run = fetch_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    ttl_hours = payload.expires_hours or PUBLIC_PROGRESS_TTL_HOURS
+    token = create_progress_token(run_id, ttl_hours)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
+    origin = str(request.base_url).rstrip("/")
+    return {
+        "run_id": run_id,
+        "token": token,
+        "url": f"{origin}/progress/{token}",
+        "expires_at": expires_at.isoformat(),
+    }
+
+
+@app.get("/public/runs/progress", response_model=PublicRunProgressResponse)
+def public_run_progress(token: str = Query(..., min_length=16)) -> dict:
+    payload = verify_progress_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    run = fetch_run(int(payload["run_id"]))
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    fields = (
+        "id",
+        "run_name",
+        "status",
+        "stage",
+        "job_id",
+        "slurm_state",
+        "slurm_reason",
+        "slurm_exit_code",
+        "slurm_exit_signal",
+        "slurm_elapsed",
+        "submitted_at",
+        "started_at",
+        "finished_at",
+        "message",
+        "created_at",
+        "updated_at",
+    )
+    return {key: run.get(key) for key in fields}
 
 
 @app.post(
