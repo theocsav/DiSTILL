@@ -77,7 +77,9 @@ def compute_neighborhood_enrichment(input_path: str, output_path: str) -> None:
     nmf_labels = adata.obs["NMF_factor"]
     cell_diameters_um = 2 * np.sqrt(adata.obs["Area"] / np.pi)
     all_factor_names = sorted(adata.obs["NMF_factor"].unique())
-    fov_groups = adata.obs.reset_index().groupby("unique_fov")["index"].apply(list)
+    obs_frame = adata.obs.copy()
+    obs_frame["obs_name"] = adata.obs_names.astype(str)
+    fov_groups = obs_frame.groupby("unique_fov")["obs_name"].apply(list)
     results = []
     for fov_id, cell_indices in fov_groups.items():
         original_indices = adata.obs.index.get_indexer(cell_indices)
