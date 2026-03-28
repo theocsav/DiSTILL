@@ -22,7 +22,7 @@ pytest-tmp/
 pytest-cache-files-*/
 
 # Runtime data
-runs/
+/runs/
 runs.db
 *.db
 
@@ -39,3 +39,6 @@ bolen_clon/
 docs/
 
 commands_file.md
+
+!apps/web/pages/runs/
+!apps/web/pages/runs/[id].tsx
