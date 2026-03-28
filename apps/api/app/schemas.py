@@ -177,7 +177,7 @@ class PublicRunProgressResponse(BaseModel):
 
 class UploadInitRequest(BaseModel):
     dataset_id: str = Field(..., min_length=3, max_length=64)
-    file_role: Literal["staged", "metadata", "reference"]
+    file_role: Literal["staged", "metadata", "reference", "nmf_artifact"]
     file_name: str = Field(..., min_length=1, max_length=255)
     total_size: int = Field(..., ge=0)
     content_type: Optional[str] = None
@@ -207,9 +207,10 @@ class UploadFinalizeDatasetRequest(BaseModel):
     platform: str = Field(..., min_length=1, max_length=64)
     notes: Optional[str] = None
     recommended_preset: Optional[str] = None
-    staged_upload_id: str = Field(..., min_length=8)
-    cell_metadata_upload_id: str = Field(..., min_length=8)
+    staged_upload_id: Optional[str] = Field(default=None, min_length=8)
+    cell_metadata_upload_id: Optional[str] = Field(default=None, min_length=8)
     reference_upload_id: Optional[str] = None
+    nmf_artifact_upload_id: Optional[str] = Field(default=None, min_length=8)
     public: bool = True
 
 

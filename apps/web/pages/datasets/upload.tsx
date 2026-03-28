@@ -25,6 +25,9 @@ const MAX_CLIENT_HASH_MB =
 const MAX_CLIENT_HASH_BYTES = Math.floor(MAX_CLIENT_HASH_MB * 1024 * 1024);
 const MAX_CHUNK_RETRIES = 3;
 
+type UploadMode = "raw" | "downstream";
+type UploadRole = "staged" | "metadata" | "reference" | "nmf_artifact";
+
 export default function DatasetUploadPage() {
   const [currentUser, setCurrentUser] = useState<string | null>(null);
   const [datasetId, setDatasetId] = useState("");
@@ -33,9 +36,11 @@ export default function DatasetUploadPage() {
   const [platform, setPlatform] = useState("");
   const [recommendedPreset, setRecommendedPreset] = useState("");
   const [notes, setNotes] = useState("");
+  const [uploadMode, setUploadMode] = useState<UploadMode>("raw");
   const [stagedFile, setStagedFile] = useState<File | null>(null);
   const [metadataFile, setMetadataFile] = useState<File | null>(null);
   const [referenceFile, setReferenceFile] = useState<File | null>(null);
+  const [nmfArtifactFile, setNmfArtifactFile] = useState<File | null>(null);
   const [publicDatasets, setPublicDatasets] = useState<Dataset[]>([]);
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
@@ -77,7 +82,7 @@ export default function DatasetUploadPage() {
 
   async function ensureSession(
     dataset: string,
-    role: "staged" | "metadata" | "reference",
+    role: UploadRole,
     file: File,
     expectedSha256?: string
   ): Promise<UploadSession> {
@@ -114,7 +119,7 @@ export default function DatasetUploadPage() {
 
   async function transferFile(
     dataset: string,
-    role: "staged" | "metadata" | "reference",
+    role: UploadRole,
     file: File,
     totalBytes: number,
     bytesCompletedBeforeFile: number,
@@ -192,8 +197,12 @@ export default function DatasetUploadPage() {
       setStatus("dataset_id, label, organ, and platform are required.");
       return;
     }
-    if (!stagedFile || !metadataFile) {
-      setStatus("Upload both staged h5ad and cell metadata files.");
+    if (uploadMode === "raw" && (!stagedFile || !metadataFile)) {
+      setStatus("Raw-entry uploads require both a staged h5ad and cell metadata file.");
+      return;
+    }
+    if (uploadMode === "downstream" && !nmfArtifactFile) {
+      setStatus("Downstream uploads require a cosmx_with_nmf.h5ad artifact.");
       return;
     }
     setStatus("");
@@ -202,15 +211,21 @@ export default function DatasetUploadPage() {
     setPaused(false);
     setRetryCount(0);
     setEtaSeconds(null);
-    setFileProgress({ staged: 0, metadata: 0, reference: 0 });
+    setFileProgress({ staged: 0, metadata: 0, reference: 0, nmf_artifact: 0 });
     try {
       const uploadStart = Date.now();
       const dataset = datasetId.trim().toLowerCase();
-      const uploads: Array<{ role: "staged" | "metadata" | "reference"; file: File }> = [
-        { role: "staged", file: stagedFile },
-        { role: "metadata", file: metadataFile },
-      ];
-      if (referenceFile) {
+      const uploads: Array<{ role: UploadRole; file: File }> = [];
+      if (uploadMode === "raw") {
+        uploads.push({ role: "staged", file: stagedFile! });
+        uploads.push({ role: "metadata", file: metadataFile! });
+      } else {
+        uploads.push({ role: "nmf_artifact", file: nmfArtifactFile! });
+        if (metadataFile) {
+          uploads.push({ role: "metadata", file: metadataFile });
+        }
+      }
+      if (referenceFile && uploadMode === "raw") {
         uploads.push({ role: "reference", file: referenceFile });
       }
       const totalBytes = uploads.reduce((sum, entry) => sum + entry.file.size, 0);
@@ -219,6 +234,7 @@ export default function DatasetUploadPage() {
       let stagedUploadId = "";
       let metadataUploadId = "";
       let referenceUploadId: string | undefined;
+      let nmfArtifactUploadId: string | undefined;
 
       setChecksumNote("Computing client-side checksums...");
       for (const entry of uploads) {
@@ -256,6 +272,8 @@ export default function DatasetUploadPage() {
           stagedUploadId = uploadId;
         } else if (entry.role === "metadata") {
           metadataUploadId = uploadId;
+        } else if (entry.role === "nmf_artifact") {
+          nmfArtifactUploadId = uploadId;
         } else {
           referenceUploadId = uploadId;
         }
@@ -275,9 +293,10 @@ export default function DatasetUploadPage() {
         platform: platform.trim(),
         notes: notes.trim() || undefined,
         recommended_preset: recommendedPreset.trim() || undefined,
-        staged_upload_id: stagedUploadId,
-        cell_metadata_upload_id: metadataUploadId,
+        staged_upload_id: stagedUploadId || undefined,
+        cell_metadata_upload_id: metadataUploadId || undefined,
         reference_upload_id: referenceUploadId,
+        nmf_artifact_upload_id: nmfArtifactUploadId,
         public: true,
       });
       setStatus("Dataset uploaded and published.");
@@ -291,9 +310,11 @@ export default function DatasetUploadPage() {
       setPlatform("");
       setRecommendedPreset("");
       setNotes("");
+      setUploadMode("raw");
       setStagedFile(null);
       setMetadataFile(null);
       setReferenceFile(null);
+      setNmfArtifactFile(null);
       await refreshPublicDatasets();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -366,6 +387,25 @@ export default function DatasetUploadPage() {
           </div>
           <div className="row">
             <div>
+              <label>Upload contract</label>
+              <div className="segmented">
+                <button
+                  type="button"
+                  className={uploadMode === "raw" ? "active" : ""}
+                  onClick={() => setUploadMode("raw")}
+                >
+                  Raw entry
+                </button>
+                <button
+                  type="button"
+                  className={uploadMode === "downstream" ? "active" : ""}
+                  onClick={() => setUploadMode("downstream")}
+                >
+                  Downstream NMF
+                </button>
+              </div>
+            </div>
+            <div>
               <label>Recommended preset (optional)</label>
               <input
                 value={recommendedPreset}
@@ -377,27 +417,51 @@ export default function DatasetUploadPage() {
               <input value={notes} onChange={(event) => setNotes(event.target.value)} />
             </div>
           </div>
+          <p className="muted">
+            {uploadMode === "raw"
+              ? "Use this for datasets that start at cell2loc_nmf. Upload the spatial h5ad and matching cell metadata; reference h5ad is optional."
+              : "Use this for datasets that already start from a cosmx_with_nmf.h5ad-style artifact. Metadata is optional when coordinates and morphology are embedded."}
+          </p>
           <div className="row">
-            <div>
-              <label>Staged H5AD</label>
-              <input
-                type="file"
-                accept=".h5ad"
-                onChange={(event) => setStagedFile(event.target.files?.[0] || null)}
-              />
-            </div>
-            <div>
-              <label>Cell metadata</label>
-              <input type="file" onChange={(event) => setMetadataFile(event.target.files?.[0] || null)} />
-            </div>
-            <div>
-              <label>Reference H5AD (optional)</label>
-              <input
-                type="file"
-                accept=".h5ad"
-                onChange={(event) => setReferenceFile(event.target.files?.[0] || null)}
-              />
-            </div>
+            {uploadMode === "raw" ? (
+              <>
+                <div>
+                  <label>Staged H5AD</label>
+                  <input
+                    type="file"
+                    accept=".h5ad"
+                    onChange={(event) => setStagedFile(event.target.files?.[0] || null)}
+                  />
+                </div>
+                <div>
+                  <label>Cell metadata</label>
+                  <input type="file" onChange={(event) => setMetadataFile(event.target.files?.[0] || null)} />
+                </div>
+                <div>
+                  <label>Reference H5AD (optional)</label>
+                  <input
+                    type="file"
+                    accept=".h5ad"
+                    onChange={(event) => setReferenceFile(event.target.files?.[0] || null)}
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <label>cosmx_with_nmf.h5ad</label>
+                  <input
+                    type="file"
+                    accept=".h5ad"
+                    onChange={(event) => setNmfArtifactFile(event.target.files?.[0] || null)}
+                  />
+                </div>
+                <div>
+                  <label>Cell metadata (optional)</label>
+                  <input type="file" onChange={(event) => setMetadataFile(event.target.files?.[0] || null)} />
+                </div>
+              </>
+            )}
           </div>
           <div className="inline-actions">
             <button type="submit" disabled={loading}>
@@ -428,6 +492,7 @@ export default function DatasetUploadPage() {
                 <div>staged: {fileProgress.staged ?? 0}%</div>
                 <div>metadata: {fileProgress.metadata ?? 0}%</div>
                 <div>reference: {fileProgress.reference ?? 0}%</div>
+                <div>nmf artifact: {fileProgress.nmf_artifact ?? 0}%</div>
               </div>
             </div>
           ) : null}

@@ -391,7 +391,7 @@ export async function uploadDataset(payload: DatasetUploadPayload) {
 
 export type UploadInitPayload = {
   dataset_id: string;
-  file_role: "staged" | "metadata" | "reference";
+  file_role: "staged" | "metadata" | "reference" | "nmf_artifact";
   file_name: string;
   total_size: number;
   content_type?: string;
@@ -457,9 +457,10 @@ export type FinalizeDatasetUploadPayload = {
   platform: string;
   notes?: string;
   recommended_preset?: string;
-  staged_upload_id: string;
-  cell_metadata_upload_id: string;
+  staged_upload_id?: string;
+  cell_metadata_upload_id?: string;
   reference_upload_id?: string;
+  nmf_artifact_upload_id?: string;
   public?: boolean;
 };
 

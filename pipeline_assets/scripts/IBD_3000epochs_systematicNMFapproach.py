@@ -348,6 +348,12 @@ else:
                 
                 if 'CenterX_global_px' in spatial_df.columns and 'CenterY_global_px' in spatial_df.columns:
                     adata_st.obsm['spatial'] = spatial_df[['CenterX_global_px', 'CenterY_global_px']].values
+                    # Persist key spatial metadata in obs so downstream stages can consume the saved h5ad directly.
+                    for column in ["CenterX_global_px", "CenterY_global_px", "Area", "Width", "Height"]:
+                        if column in spatial_df.columns:
+                            adata_st.obs[column] = spatial_df[column].values
+                    if metadata_cell_key == "cell_ID" and "cell_ID" in spatial_df.columns:
+                        adata_st.obs["cell_ID"] = spatial_df["cell_ID"].values
                     print("Spatial coordinates loaded and added to adata_st.obsm['spatial'].")
                     spatial_coords_present = True
                 else:

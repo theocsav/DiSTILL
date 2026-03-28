@@ -242,7 +242,29 @@ export default function Home() {
   useEffect(() => {
     setPreflightResult(null);
     setDryRunResult(null);
-  }, [selectedDatasetId, mode, nComponents, kMin, kMax, runType]);
+  }, [
+    selectedDatasetId,
+    mode,
+    nComponents,
+    kMin,
+    kMax,
+    runType,
+    cosmxPath,
+    cellMetadataPath,
+    referencePath,
+    cosmxWithNmfPath,
+    outputDir,
+    refModelDir,
+    slurmTime,
+    slurmCpus,
+    slurmMem,
+    slurmAccount,
+    slurmPartition,
+    slurmQos,
+    slurmMailUser,
+    slurmCondaEnv,
+    submit,
+  ]);
 
   useEffect(() => {
     if (!currentUser || !autoRefreshRuns) {

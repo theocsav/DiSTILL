@@ -442,46 +442,74 @@ def finalize_uploaded_dataset(
     payload: UploadFinalizeDatasetRequest,
     username: str = Depends(require_session),
 ) -> dict:
+    upload_refs = {
+        "staged": payload.staged_upload_id,
+        "metadata": payload.cell_metadata_upload_id,
+        "reference": payload.reference_upload_id,
+        "nmf_artifact": payload.nmf_artifact_upload_id,
+    }
+    uploads_by_role: dict[str, dict | None] = {}
     try:
-        staged = get_upload_status(payload.staged_upload_id, username)
-        metadata = get_upload_status(payload.cell_metadata_upload_id, username)
-        reference = (
-            get_upload_status(payload.reference_upload_id, username) if payload.reference_upload_id else None
-        )
+        for role, upload_id in upload_refs.items():
+            uploads_by_role[role] = get_upload_status(upload_id, username) if upload_id else None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    uploads = [staged, metadata] + ([reference] if reference else [])
+    staged = uploads_by_role["staged"]
+    metadata = uploads_by_role["metadata"]
+    reference = uploads_by_role["reference"]
+    nmf_artifact = uploads_by_role["nmf_artifact"]
+
+    if staged and nmf_artifact:
+        raise HTTPException(
+            status_code=400,
+            detail="Finalize either a raw-entry dataset or a downstream nmf artifact dataset, not both.",
+        )
+    if not staged and not nmf_artifact:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either staged_upload_id for raw-entry datasets or nmf_artifact_upload_id for downstream datasets.",
+        )
+    if staged and not metadata:
+        raise HTTPException(status_code=400, detail="Raw-entry datasets require cell_metadata_upload_id.")
+
+    uploads = [item for item in (staged, metadata, reference, nmf_artifact) if item]
     for item in uploads:
-        if not item:
-            continue
         if not item.get("completed"):
             raise HTTPException(status_code=400, detail=f"Upload not complete: {item.get('upload_id')}")
         if item.get("dataset_id") != payload.dataset_id.strip().lower():
             raise HTTPException(status_code=400, detail=f"Dataset mismatch in upload: {item.get('upload_id')}")
 
-    if staged.get("file_role") != "staged":
+    if staged and staged.get("file_role") != "staged":
         raise HTTPException(status_code=400, detail="staged_upload_id must reference role 'staged'.")
-    if metadata.get("file_role") != "metadata":
+    if metadata and metadata.get("file_role") != "metadata":
         raise HTTPException(status_code=400, detail="cell_metadata_upload_id must reference role 'metadata'.")
     if reference and reference.get("file_role") != "reference":
         raise HTTPException(status_code=400, detail="reference_upload_id must reference role 'reference'.")
+    if nmf_artifact and nmf_artifact.get("file_role") != "nmf_artifact":
+        raise HTTPException(status_code=400, detail="nmf_artifact_upload_id must reference role 'nmf_artifact'.")
 
-    upload_root = str(Path(staged["final_path"]).resolve().parent)
-    dataset_checksums = {
-        "staged": staged.get("sha256"),
-        "metadata": metadata.get("sha256"),
-    }
+    primary_upload = staged or nmf_artifact
+    assert primary_upload is not None
+    upload_root = str(Path(primary_upload["final_path"]).resolve().parent)
+    dataset_checksums = {}
+    if staged:
+        dataset_checksums["staged"] = staged.get("sha256")
+    if metadata:
+        dataset_checksums["metadata"] = metadata.get("sha256")
     if reference:
         dataset_checksums["reference"] = reference.get("sha256")
+    if nmf_artifact:
+        dataset_checksums["nmf_artifact"] = nmf_artifact.get("sha256")
     dataset = {
         "id": payload.dataset_id.strip().lower(),
         "label": payload.label.strip(),
         "organ": payload.organ.strip(),
         "platform": payload.platform.strip(),
-        "staged_path": staged["final_path"],
-        "cell_metadata_path": metadata["final_path"],
+        "staged_path": staged["final_path"] if staged else None,
+        "cell_metadata_path": metadata["final_path"] if metadata else None,
         "reference_h5ad_path": reference["final_path"] if reference else None,
+        "cosmx_with_nmf_path": nmf_artifact["final_path"] if nmf_artifact else None,
         "recommended_preset": payload.recommended_preset.strip() if payload.recommended_preset else None,
         "notes": payload.notes.strip() if payload.notes else None,
         "public": payload.public,

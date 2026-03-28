@@ -19,16 +19,18 @@ from .settings import (
 )
 from .storage import enforce_allowed_path
 
-ALLOWED_FILE_ROLES = {"staged", "metadata", "reference"}
+ALLOWED_FILE_ROLES = {"staged", "metadata", "reference", "nmf_artifact"}
 ROLE_MAX_SIZE_BYTES = {
     "staged": int(UPLOAD_MAX_SIZE_STAGED_GB * 1024 * 1024 * 1024),
     "metadata": int(UPLOAD_MAX_SIZE_METADATA_GB * 1024 * 1024 * 1024),
     "reference": int(UPLOAD_MAX_SIZE_REFERENCE_GB * 1024 * 1024 * 1024),
+    "nmf_artifact": int(UPLOAD_MAX_SIZE_STAGED_GB * 1024 * 1024 * 1024),
 }
 ROLE_ALLOWED_EXTS = {
     "staged": {item.strip().lower() for item in UPLOAD_ALLOWED_EXT_STAGED.split(",") if item.strip()},
     "metadata": {item.strip().lower() for item in UPLOAD_ALLOWED_EXT_METADATA.split(",") if item.strip()},
     "reference": {item.strip().lower() for item in UPLOAD_ALLOWED_EXT_REFERENCE.split(",") if item.strip()},
+    "nmf_artifact": {item.strip().lower() for item in UPLOAD_ALLOWED_EXT_STAGED.split(",") if item.strip()},
 }
 
 
