@@ -330,7 +330,8 @@ else:
         print("Please confirm the exact filename and path of your 'Cell Metadata File' and update 'cell_metadata_file_name' in the code.")
     else:
         print(f"\nFound spatial metadata file: {spatial_metadata_path}. Loading...")
-        spatial_df = pd.read_csv(spatial_metadata_path, compression='gzip')
+        metadata_compression = 'gzip' if spatial_metadata_path.endswith('.gz') else None
+        spatial_df = pd.read_csv(spatial_metadata_path, compression=metadata_compression)
 
         if 'fov' in spatial_df.columns and 'cell_ID' in spatial_df.columns:
             spatial_df['unique_cell_id'] = spatial_df['fov'].astype(str) + '_' + spatial_df['cell_ID'].astype(str)
