@@ -14,6 +14,8 @@ from .ssh_exec import run_ssh_command, scp_upload, shell_quote
 from .storage import enforce_allowed_path
 
 PIPELINE_RUNNER = REPO_ROOT / "run_pipeline.py"
+LEGACY_RUN_BOUND_PATH_KEYS = ("run_dir", "output_dir", "ref_model_dir", "rcausal_output_dir")
+LEGACY_RUN_BOUND_SLURM_KEYS = ("output", "error")
 
 
 def load_preset(preset_path: str) -> Dict[str, Any]:
@@ -54,13 +56,42 @@ def apply_dataset_registry(config: Dict[str, Any]) -> Dict[str, Any]:
     return merged
 
 
+def _rewrite_legacy_run_bound_path(value: Any, old_run_name: str, new_run_name: str) -> Any:
+    if not isinstance(value, str) or not value:
+        return value
+    pattern = re.compile(rf"(?:(?<=^)|(?<=[\\/])){re.escape(old_run_name)}(?:(?=$)|(?=[\\/]))")
+    return pattern.sub(new_run_name, value)
+
+
+def normalize_legacy_run_bound_paths(run_name: str, config: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(config)
+    original_run_name = str(normalized.get("run_name") or "").strip()
+    normalized["run_name"] = run_name
+    if not original_run_name or original_run_name == run_name:
+        return normalized
+
+    for key in LEGACY_RUN_BOUND_PATH_KEYS:
+        normalized[key] = _rewrite_legacy_run_bound_path(normalized.get(key), original_run_name, run_name)
+
+    slurm = normalized.get("slurm")
+    if isinstance(slurm, dict):
+        slurm_copy = dict(slurm)
+        for key in LEGACY_RUN_BOUND_SLURM_KEYS:
+            slurm_copy[key] = _rewrite_legacy_run_bound_path(slurm_copy.get(key), original_run_name, run_name)
+        normalized["slurm"] = slurm_copy
+
+    return normalized
+
+
 def resolve_run_paths(run_name: str, config: Dict[str, Any]) -> tuple[Path, Path, Dict[str, Any]]:
-    config = dict(config)
-    config["run_name"] = run_name
+    config = normalize_legacy_run_bound_paths(run_name, config)
     requested_run_dir = config.get("run_dir")
     run_dir = Path(requested_run_dir) if requested_run_dir else RUNS_DIR / run_name
     if not run_dir.is_absolute():
-        run_dir = REPO_ROOT / run_dir
+        if run_dir.parts and run_dir.parts[0] == "runs":
+            run_dir = RUNS_DIR / Path(*run_dir.parts[1:])
+        else:
+            run_dir = REPO_ROOT / run_dir
     if RUNS_DIR.resolve() not in run_dir.resolve().parents and run_dir.resolve() != RUNS_DIR.resolve():
         raise ValueError("run_dir must be inside RUNS_DIR")
 

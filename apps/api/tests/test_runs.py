@@ -75,6 +75,55 @@ def test_create_run_queued(tmp_path: Path) -> None:
         assert body["status"] == "queued"
 
 
+def test_create_run_from_legacy_preset_rewrites_pinned_paths(tmp_path: Path) -> None:
+    client = create_client(tmp_path)
+    with client:
+        login = client.post("/auth/login", json={"username": "test-user", "password": "test-pass"})
+        assert login.status_code == 200
+        csrf_token = login.json().get("csrf_token")
+        assert csrf_token
+
+        legacy_output_root = tmp_path / "remote-runs"
+        legacy_preset = {
+            "id": "ibd_cosmx_k4",
+            "run_name": "ibd_cosmx_k4",
+            "run_dir": "runs/ibd_cosmx_k4",
+            "output_dir": str(legacy_output_root / "ibd_cosmx_k4" / "output"),
+            "ref_model_dir": str(legacy_output_root / "ibd_cosmx_k4" / "ref_model"),
+            "cosmx_h5ad_path": str(tmp_path / "cosmx.h5ad"),
+            "reference_h5ad_path": str(tmp_path / "reference.h5ad"),
+            "cell_metadata_path": str(tmp_path / "meta.csv"),
+            "n_components": 4,
+            "stages": ["cell2loc_nmf"],
+        }
+        preset_path = tmp_path / "presets" / "legacy.json"
+        preset_path.parent.mkdir(parents=True, exist_ok=True)
+        preset_path.write_text(json.dumps(legacy_preset, indent=2), encoding="utf-8")
+
+        payload = {
+            "run_name": "smoke-20260327-1",
+            "preset_path": "legacy.json",
+            "queue": True,
+        }
+        resp = client.post("/runs", json=payload, headers={"X-CSRF-Token": csrf_token or ""})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["run_name"] == "smoke-20260327-1"
+        assert Path(body["run_dir"]).name == "smoke-20260327-1"
+        output_dir = Path(body["output_dir"])
+        assert output_dir.parent.name == "smoke-20260327-1"
+        assert output_dir.name == "output"
+
+        config_path = Path(body["config_path"])
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        assert config["run_name"] == "smoke-20260327-1"
+        assert Path(config["run_dir"]).name == "smoke-20260327-1"
+        assert Path(config["output_dir"]).parent.name == "smoke-20260327-1"
+        assert Path(config["output_dir"]).name == "output"
+        assert Path(config["ref_model_dir"]).parent.name == "smoke-20260327-1"
+        assert Path(config["ref_model_dir"]).name == "ref_model"
+
+
 def test_create_run_prepare_only_stays_local_when_ssh_backend_configured(tmp_path: Path, monkeypatch) -> None:
     client = create_client(tmp_path)
     run_name = "prepare-local"

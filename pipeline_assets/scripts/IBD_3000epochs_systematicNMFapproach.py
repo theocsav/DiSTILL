@@ -309,17 +309,19 @@ print("         This is ABSOLUTELY REQUIRED for the spatial Cell2location model.
 print("         The next step (model initialization/training) WILL FAIL without these.")
 print("#########################################################################")
 
-if 'fov' not in adata_st.obs.columns or 'cell_ID' not in adata_st.obs.columns:
-    print("ERROR: 'fov' or 'cell_ID' columns not found in adata_st.obs. Cannot create unique cell IDs for spatial alignment.")
+cell_obs_key = 'cell_ID' if 'cell_ID' in adata_st.obs.columns else 'cell_id' if 'cell_id' in adata_st.obs.columns else None
+
+if 'fov' not in adata_st.obs.columns or cell_obs_key is None:
+    print("ERROR: 'fov' or cell identifier column ('cell_ID'/'cell_id') not found in adata_st.obs. Cannot create unique cell IDs for spatial alignment.")
     print("Please ensure your initial adata_st loading includes these columns in .obs.")
     spatial_coords_present = False
 else:
-    # Create a unique cell ID by combining fov and cell_ID
-    adata_st.obs['unique_cell_id'] = adata_st.obs['fov'].astype(str) + '_' + adata_st.obs['cell_ID'].astype(str)
+    # Create a unique cell ID by combining fov and the available cell identifier column.
+    adata_st.obs['unique_cell_id'] = adata_st.obs['fov'].astype(str) + '_' + adata_st.obs[cell_obs_key].astype(str)
     adata_st.obs_names = adata_st.obs['unique_cell_id']
     adata_st.obs_names_make_unique()
 
-    print(f"adata_st.obs_names recreated as unique_cell_id (fov_cell_ID). Example: {adata_st.obs_names[0]}")
+    print(f"adata_st.obs_names recreated as unique_cell_id (fov_{cell_obs_key}). Example: {adata_st.obs_names[0]}")
 
     cell_metadata_file_name = "GSE234713_CosMx_cell_metadata.csv.gz" 
     spatial_metadata_path = os.path.join("/blue/kejun.huang/tan.m/IBDCosMx_scRNAseq/CosMx/", cell_metadata_file_name)
@@ -332,8 +334,9 @@ else:
         print(f"\nFound spatial metadata file: {spatial_metadata_path}. Loading...")
         spatial_df = pd.read_csv(spatial_metadata_path, compression='gzip')
 
-        if 'fov' in spatial_df.columns and 'cell_ID' in spatial_df.columns:
-            spatial_df['unique_cell_id'] = spatial_df['fov'].astype(str) + '_' + spatial_df['cell_ID'].astype(str)
+        metadata_cell_key = 'cell_ID' if 'cell_ID' in spatial_df.columns else 'cell_id' if 'cell_id' in spatial_df.columns else None
+        if 'fov' in spatial_df.columns and metadata_cell_key is not None:
+            spatial_df['unique_cell_id'] = spatial_df['fov'].astype(str) + '_' + spatial_df[metadata_cell_key].astype(str)
             spatial_df.set_index('unique_cell_id', inplace=True)
             
             common_cells_st_spatial = list(set(adata_st.obs_names) & set(spatial_df.index))
@@ -351,7 +354,7 @@ else:
                     print("ERROR: 'CenterX_global_px' or 'CenterY_global_px' columns not found in spatial metadata file. Cannot add spatial coordinates.")
                     spatial_coords_present = False
         else:
-            print("ERROR: 'fov' or 'cell_ID' columns not found in the spatial metadata file. Cannot create unique cell IDs for alignment.")
+            print("ERROR: 'fov' or cell identifier column ('cell_ID'/'cell_id') not found in the spatial metadata file. Cannot create unique cell IDs for alignment.")
             spatial_coords_present = False
 
 if not spatial_coords_present:
