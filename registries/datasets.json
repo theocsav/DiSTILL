@@ -58,5 +58,55 @@
       "Height",
       "unique_cell_id"
     ]
+  },
+  {
+    "id": "bolen_clon39",
+    "label": "Bolen Human Sigmoid Colon CLON39",
+    "organ": "colon",
+    "platform": "cosmx",
+    "staged_path": "/blue/kejun.huang/vasco.hinostroza/data/bolen_clon/processed/Bolen_CLON39_R1000_spatial.h5ad",
+    "cell_metadata_path": "/blue/kejun.huang/vasco.hinostroza/data/bolen_clon/processed/Bolen_CLON39_R1000_cell_metadata.csv",
+    "reference_h5ad_path": "/orange/kejun.huang/vasco.hinostroza/data/ibd/reference.h5ad",
+    "recommended_preset": "bolen_clon_k4",
+    "notes": "Raw-entry Bolen sigmoid-colon CosMx dataset converted from exprMat and metadata CSV files. Reuses the existing colon reference h5ad for initial end-to-end testing.",
+    "schema_manifest": {
+      "obs_keys": [
+        "patient",
+        "fov",
+        "cell_id",
+        "cell_ID",
+        "unique_cell_id",
+        "Area",
+        "Width",
+        "Height",
+        "CenterX_local_px",
+        "CenterY_local_px",
+        "CenterX_global_px",
+        "CenterY_global_px",
+        "cell"
+      ],
+      "has_raw_counts": true,
+      "has_spatial_coordinates": true,
+      "has_morphology": true,
+      "has_nmf_labels": false,
+      "gene_id_format": "panel_symbol"
+    },
+    "metadata_manifest": {
+      "has_spatial_coordinates": true,
+      "has_morphology": true,
+      "has_join_keys": true
+    },
+    "metadata_columns": [
+      "patient",
+      "fov",
+      "cell_id",
+      "cell_ID",
+      "unique_cell_id",
+      "Area",
+      "Width",
+      "Height",
+      "CenterX_global_px",
+      "CenterY_global_px"
+    ]
   }
 ]

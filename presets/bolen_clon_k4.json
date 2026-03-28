@@ -1,0 +1,49 @@
+{
+  "id": "bolen_clon_k4",
+  "label": "Bolen CLON39 CosMx",
+  "organ": "colon",
+  "platform": "cosmx",
+  "run_name": "bolen_clon_k4",
+  "mode": "fixed_k",
+  "template_path": "pipeline_assets/scripts/IBD_3000epochs_500samples_NMF-k4.py",
+  "reference_h5ad_path": "/orange/kejun.huang/vasco.hinostroza/data/ibd/reference.h5ad",
+  "cosmx_h5ad_path": "/blue/kejun.huang/vasco.hinostroza/data/bolen_clon/processed/Bolen_CLON39_R1000_spatial.h5ad",
+  "cell_metadata_path": "/blue/kejun.huang/vasco.hinostroza/data/bolen_clon/processed/Bolen_CLON39_R1000_cell_metadata.csv",
+  "ref_model_name": "cell2location_reference_model_k4",
+  "inf_aver_name": "inf_aver_k4.csv",
+  "n_components": 4,
+  "stages": ["cell2loc_nmf", "post_nmf", "rcausal_mgm", "mlp", "report"],
+  "post_nmf_mode": "papermill",
+  "post_nmf_notebook_path": "pipeline_assets/IBD_Post_NMF_Analysis.ipynb",
+  "rcausal_mode": "python",
+  "rcausal_script_path": "pipeline_assets/IBD_RCausalMGM_Preparation.py",
+  "mlp_script_path": "pipeline_assets/IBD_MLP_44Features.py",
+  "report_title": "NicheRunner Bolen CLON39 Run",
+  "preflight_slurm": {
+    "time": "0-00:10:00",
+    "mem": "8gb",
+    "cpus_per_task": 2
+  },
+  "default_resources": {
+    "time": "72:00:00",
+    "cpus_per_task": 32,
+    "mem": "500gb",
+    "qos": "kejun.huang-b"
+  },
+  "default_params": {
+    "mode": "fixed_k",
+    "n_components": 4
+  },
+  "slurm": {
+    "enabled": true,
+    "job_name": "bolen_clon_k4",
+    "account": "kejun.huang",
+    "time": "72:00:00",
+    "mem": "500gb",
+    "cpus_per_task": 32,
+    "qos": "kejun.huang-b",
+    "mail_user": "vasco.hinostroza@ufl.edu",
+    "mail_type": "ALL",
+    "conda_env": "/blue/kejun.huang/vasco.hinostroza/nicherunner/conda/envs/ibd_cosmx_k4"
+  }
+}
