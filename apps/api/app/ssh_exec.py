@@ -64,7 +64,10 @@ def _scp_base_cmd() -> list[str]:
 
 def run_ssh_command(command: str, check: bool = False) -> subprocess.CompletedProcess[str]:
     cmd = _ssh_base_cmd() + [command]
-    return subprocess.run(cmd, capture_output=True, text=True, check=check)
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, check=check)
+    except FileNotFoundError as exc:
+        raise RuntimeError("ssh client binary not found in API runtime.") from exc
 
 
 def run_command(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -103,4 +106,7 @@ def scp_upload(local_path: str, remote_dir: str) -> subprocess.CompletedProcess[
     _require_ssh_settings()
     remote_target = f"{SSH_USER}@{SSH_HOST}:{remote_dir}"
     cmd = _scp_base_cmd() + [local_path, remote_target]
-    return subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        raise RuntimeError("scp client binary not found in API runtime.") from exc

@@ -36,4 +36,6 @@ Thumbs.db
 # test
 test_files/
 bolen_clon/
-docs/BOLEN_DATASET_CHECKLIST.md
+docs/
+
+commands_file.md

@@ -222,6 +222,7 @@ def validate_config(
     errors: List[str] = []
     warnings: List[str] = []
     checks: Dict[str, Any] = {"exists": {}, "roots": {}, "permissions": {}, "compute_access": {}}
+    external_poller_mode = bool(QUEUE_POLLER_TOKEN) and not is_ssh_backend()
     if is_ssh_backend():
         checks["compute_access"]["mode"] = "ssh_backend"
         checks["compute_access"]["summary"] = "API path checks run against the compute environment over SSH."
@@ -253,11 +254,16 @@ def validate_config(
 
         exists_result = remote_path_exists(value)
         exists = bool(exists_result)
-        checks["exists"][key] = exists
+        checks["exists"][key] = exists if not external_poller_mode else "unknown_external_poller"
         if not exists:
-            errors.append(f"Path does not exist: {key} -> {value}")
             checks["permissions"][key] = "skipped"
-            checks["compute_access"][key] = "missing"
+            checks["compute_access"][key] = "unknown_external_poller" if external_poller_mode else "missing"
+            if external_poller_mode:
+                warnings.append(
+                    f"{key} is not visible on the API host; verify it exists on HPG for external-poller runs: {value}"
+                )
+            else:
+                errors.append(f"Path does not exist: {key} -> {value}")
             return
 
         if is_ssh_backend():
@@ -425,6 +431,13 @@ def validate_config(
                 if "cell2loc_nmf" in stages:
                     raise RuntimeError("cosmx_h5ad_path and cell_metadata_path are required for join-key validation.")
                 checks["join_keys"] = {"status": "skipped", "reason": "cell_metadata_path not provided for downstream-only run."}
+                return errors, warnings, checks
+            if external_poller_mode:
+                checks["join_keys"] = {
+                    "status": "skipped",
+                    "reason": "Join-key validation is skipped on the API host in external-poller mode; validate on HPG or via a smoke run."
+                }
+                warnings.append("Join-key validation skipped on API host in external-poller mode.")
                 return errors, warnings, checks
             h5ad_path = Path(h5ad_value)
             metadata_path = Path(metadata_value)
