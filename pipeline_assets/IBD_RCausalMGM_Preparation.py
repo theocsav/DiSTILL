@@ -25,13 +25,30 @@ DEFAULT_NICHE_DIR = os.path.join(DEFAULT_BASE_DIR, "NicheCompositions")
 DEFAULT_NEIGHBORHOOD_DIR = os.path.join(DEFAULT_BASE_DIR, "NeighborhoodInteractions")
 
 
+def _coerce_field_of_view_label(value: object) -> str:
+    return str(value).strip()
+
+
+def _field_of_view_to_disease_state(value: object) -> str:
+    text = _coerce_field_of_view_label(value)
+    return text.rsplit("_", 1)[0] if "_" in text else text
+
+
 def calculate_niche_compositions_percent(input_path: str, output_path: str) -> None:
     """Compute percent composition of NMF factors by field of view."""
     adata = ad.read_h5ad(input_path)
     if "NMF_factor" not in adata.obs.columns or "unique_cell_id" not in adata.obs.columns:
         raise RuntimeError("Required columns 'NMF_factor' or 'unique_cell_id' not found.")
-    df = adata.obs[["unique_cell_id", "NMF_factor"]].copy()
-    df["field_of_view"] = df["unique_cell_id"].str.rsplit("_", n=1).str[0]
+    columns = ["unique_cell_id", "NMF_factor"]
+    if "patient" in adata.obs.columns:
+        columns.append("patient")
+    if "fov" in adata.obs.columns:
+        columns.append("fov")
+    df = adata.obs[columns].copy()
+    if "patient" in df.columns and "fov" in df.columns:
+        df["field_of_view"] = df["patient"].astype(str) + "_" + df["fov"].astype(str)
+    else:
+        df["field_of_view"] = df["unique_cell_id"].astype(str).str.rsplit("_", n=1).str[0]
     niche_counts = pd.pivot_table(
         df,
         index="field_of_view",
@@ -60,7 +77,7 @@ def add_disease_state(input_path: str, output_path: str) -> None:
     df = pd.read_csv(input_path)
     if "field_of_view" not in df.columns:
         raise RuntimeError("field_of_view column not found in niche composition output.")
-    df["Disease/Health State"] = df["field_of_view"].apply(lambda value: value.split(" ")[0])
+    df["Disease/Health State"] = df["field_of_view"].apply(_field_of_view_to_disease_state)
     df.to_csv(output_path, index=False)
 
 
@@ -119,7 +136,7 @@ def compute_neighborhood_enrichment(input_path: str, output_path: str) -> None:
 def add_neighborhood_disease_state(input_path: str, output_path: str) -> None:
     """Add Disease/Health State column for neighborhood enrichment outputs."""
     df = pd.read_csv(input_path)
-    df["Disease/Health State"] = df["field_of_view"].str.split("_").str[0]
+    df["Disease/Health State"] = df["field_of_view"].apply(_field_of_view_to_disease_state)
     df.to_csv(output_path, index=False)
 
 
