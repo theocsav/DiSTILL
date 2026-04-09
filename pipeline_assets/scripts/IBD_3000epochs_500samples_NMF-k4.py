@@ -27,6 +27,14 @@ from tqdm import tqdm
 import scipy.sparse
 import re
 
+def choose_reference_obs_key(obs: pd.DataFrame, candidates: list[str], purpose: str) -> str:
+    for key in candidates:
+        if key in obs.columns:
+            return key
+    raise KeyError(
+        f"Reference h5ad is missing a usable {purpose} column. Tried: {', '.join(candidates)}"
+    )
+
 # --- Define Paths --------------------------------------------------------------------------------
 
 reference_h5ad_path = "/blue/kejun.huang/tan.m/IBDCosMx_scRNAseq/scRNA/combined_10x_reference_final.h5ad"
@@ -93,11 +101,40 @@ else:
     print("adata_ref.raw already exists.")
 
 
-# Filter out cells with NaN 'nanostring_reference' annotations
-adata_ref = adata_ref[adata_ref.obs['nanostring_reference'].notnull(), :].copy()
+reference_label_key = choose_reference_obs_key(
+    adata_ref.obs,
+    [
+        "nanostring_reference",
+        "cell_type",
+        "annotation.l2",
+        "subclass.l2",
+        "annotation.l3",
+        "subclass.full",
+        "annotation.l1",
+        "subclass.l1",
+    ],
+    "label",
+)
+reference_batch_key = choose_reference_obs_key(
+    adata_ref.obs,
+    [
+        "original_sample_id",
+        "library",
+        "patient",
+        "experiment",
+        "specimen",
+    ],
+    "batch",
+)
+print(f"Using reference label column: {reference_label_key}")
+print(f"Using reference batch column: {reference_batch_key}")
+
+# Filter out cells with missing labels
+adata_ref = adata_ref[adata_ref.obs[reference_label_key].notnull(), :].copy()
 if adata_ref.n_obs == 0:
     raise ValueError("No annotated cells remaining in adata_ref after filtering NaNs for labels. Cannot train model.")
-adata_ref.obs['nanostring_reference'] = adata_ref.obs['nanostring_reference'].astype('category')
+adata_ref.obs[reference_label_key] = adata_ref.obs[reference_label_key].astype('category')
+adata_ref.obs[reference_batch_key] = adata_ref.obs[reference_batch_key].astype(str)
 print(f"adata_ref shape after NaN filtering: {adata_ref.shape}")
 
 # Filter genes in adata_ref using cell2location's filtering utility.
@@ -162,14 +199,14 @@ print("\n--- Step 4: Setting up and Training Cell2location RegressionModel (for 
 
 c2l.models.RegressionModel.setup_anndata(
     adata=adata_ref,
-    batch_key="original_sample_id",
-    labels_key="nanostring_reference",
+    batch_key=reference_batch_key,
+    labels_key=reference_label_key,
     categorical_covariate_keys=[],
     layer=None,
 )
 print("AnnData setup complete for RegressionModel.")
 
-N_CELL_TYPES = len(adata_ref.obs['nanostring_reference'].cat.categories)
+N_CELL_TYPES = len(adata_ref.obs[reference_label_key].cat.categories)
 model_ref_trained = c2l.models.RegressionModel(
     adata_ref
 )
@@ -236,7 +273,7 @@ if "means_per_cluster_mu_fg" in adata_ref.varm.keys():
         index=adata_ref.var_names
     )
     
-    cell_type_names = adata_ref.obs['nanostring_reference'].cat.categories.tolist()
+    cell_type_names = adata_ref.obs[reference_label_key].cat.categories.tolist()
     
     selected_cols_for_inf_aver = []
     for col in inf_aver_raw.columns:
@@ -264,7 +301,7 @@ if "means_per_cluster_mu_fg" in adata_ref.varm.keys():
 
     if len(inf_aver.columns) != len(cell_type_names):
         print(f"WARNING: Number of columns in inf_aver ({len(inf_aver.columns)}) does not match number of cell types ({len(cell_type_names)}).")
-        print("This might indicate an issue with column selection. Please manually inspect inf_aver.columns and adata_ref.obs['nanostring_reference'].cat.categories.")
+        print(f"This might indicate an issue with column selection. Please manually inspect inf_aver.columns and adata_ref.obs[{reference_label_key!r}].cat.categories.")
 
 else:
     raise KeyError("Could not find 'means_per_cluster_mu_fg' in adata_ref.varm. Check cell2location version or export_posterior output structure.")
