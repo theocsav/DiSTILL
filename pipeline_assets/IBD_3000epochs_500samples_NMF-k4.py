@@ -346,17 +346,30 @@ print("         This is ABSOLUTELY REQUIRED for the spatial Cell2location model.
 print("         The next step (model initialization/training) WILL FAIL without these.")
 print("#########################################################################")
 
-if 'fov' not in adata_st.obs.columns or 'cell_ID' not in adata_st.obs.columns:
+if 'unique_cell_id' in adata_st.obs.columns:
+    adata_st.obs['unique_cell_id'] = adata_st.obs['unique_cell_id'].astype(str)
+    adata_st.obs_names = adata_st.obs['unique_cell_id']
+    adata_st.obs_names_make_unique()
+    print(f"adata_st.obs_names reused from existing unique_cell_id. Example: {adata_st.obs_names[0]}")
+elif 'fov' not in adata_st.obs.columns or 'cell_ID' not in adata_st.obs.columns:
     print("ERROR: 'fov' or 'cell_ID' columns not found in adata_st.obs. Cannot create unique cell IDs for spatial alignment.")
     print("Please ensure your initial adata_st loading includes these columns in .obs.")
     spatial_coords_present = False
 else:
-    # Create a unique cell ID by combining fov and cell_ID
-    adata_st.obs['unique_cell_id'] = adata_st.obs['fov'].astype(str) + '_' + adata_st.obs['cell_ID'].astype(str)
+    if 'patient' in adata_st.obs.columns:
+        adata_st.obs['unique_cell_id'] = (
+            adata_st.obs['patient'].astype(str) + '_' +
+            adata_st.obs['fov'].astype(str) + '_' +
+            adata_st.obs['cell_ID'].astype(str)
+        )
+        spatial_id_mode = "patient_fov_cell_ID"
+    else:
+        adata_st.obs['unique_cell_id'] = adata_st.obs['fov'].astype(str) + '_' + adata_st.obs['cell_ID'].astype(str)
+        spatial_id_mode = "fov_cell_ID"
     adata_st.obs_names = adata_st.obs['unique_cell_id']
     adata_st.obs_names_make_unique()
 
-    print(f"adata_st.obs_names recreated as unique_cell_id (fov_cell_ID). Example: {adata_st.obs_names[0]}")
+    print(f"adata_st.obs_names recreated as unique_cell_id ({spatial_id_mode}). Example: {adata_st.obs_names[0]}")
 
     cell_metadata_file_name = "GSE234713_CosMx_cell_metadata.csv.gz" 
     spatial_metadata_path = os.path.join("/blue/kejun.huang/tan.m/IBDCosMx_scRNAseq/CosMx/", cell_metadata_file_name)
@@ -370,8 +383,18 @@ else:
         metadata_compression = 'gzip' if spatial_metadata_path.endswith('.gz') else None
         spatial_df = pd.read_csv(spatial_metadata_path, compression=metadata_compression)
 
-        if 'fov' in spatial_df.columns and 'cell_ID' in spatial_df.columns:
+        if 'unique_cell_id' in spatial_df.columns:
+            spatial_df['unique_cell_id'] = spatial_df['unique_cell_id'].astype(str)
+        elif 'patient' in spatial_df.columns and 'fov' in spatial_df.columns and 'cell_ID' in spatial_df.columns:
+            spatial_df['unique_cell_id'] = (
+                spatial_df['patient'].astype(str) + '_' +
+                spatial_df['fov'].astype(str) + '_' +
+                spatial_df['cell_ID'].astype(str)
+            )
+        elif 'fov' in spatial_df.columns and 'cell_ID' in spatial_df.columns:
             spatial_df['unique_cell_id'] = spatial_df['fov'].astype(str) + '_' + spatial_df['cell_ID'].astype(str)
+
+        if 'unique_cell_id' in spatial_df.columns:
             spatial_df.set_index('unique_cell_id', inplace=True)
             
             common_cells_st_spatial = list(set(adata_st.obs_names) & set(spatial_df.index))
