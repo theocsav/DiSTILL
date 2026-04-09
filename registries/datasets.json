@@ -108,5 +108,57 @@
       "CenterX_global_px",
       "CenterY_global_px"
     ]
+  },
+  {
+    "id": "kidney_cosmx_ssc6",
+    "label": "Kidney CosMx HD/SSc Six-Sample",
+    "organ": "kidney",
+    "platform": "cosmx",
+    "staged_path": "/blue/kejun.huang/vasco.hinostroza/data/kidney_dataset/processed/kidney_cosmx_six_sample_spatial.h5ad",
+    "cell_metadata_path": "/blue/kejun.huang/vasco.hinostroza/data/kidney_dataset/processed/kidney_cosmx_six_sample_cell_metadata.csv",
+    "reference_h5ad_path": "/blue/kejun.huang/vasco.hinostroza/data/kidney_dataset/processed/gse183277_kidney_reference.h5ad",
+    "recommended_preset": "kidney_cosmx_ssc_k4",
+    "notes": "Six-sample kidney CosMx dataset built from the paper source-data archives (HD1-3 and SSc1-3) with a GSE183277-derived kidney scRNA reference.",
+    "schema_manifest": {
+      "obs_keys": [
+        "patient",
+        "Disease_State",
+        "fov",
+        "cell_id",
+        "cell_ID",
+        "unique_cell_id",
+        "Area",
+        "Width",
+        "Height",
+        "CenterX_local_px",
+        "CenterY_local_px",
+        "CenterX_global_px",
+        "CenterY_global_px",
+        "cell"
+      ],
+      "has_raw_counts": true,
+      "has_spatial_coordinates": true,
+      "has_morphology": true,
+      "has_nmf_labels": false,
+      "gene_id_format": "panel_symbol"
+    },
+    "metadata_manifest": {
+      "has_spatial_coordinates": true,
+      "has_morphology": true,
+      "has_join_keys": true
+    },
+    "metadata_columns": [
+      "patient",
+      "Disease_State",
+      "fov",
+      "cell_id",
+      "cell_ID",
+      "unique_cell_id",
+      "Area",
+      "Width",
+      "Height",
+      "CenterX_global_px",
+      "CenterY_global_px"
+    ]
   }
 ]
