@@ -626,6 +626,16 @@ if "cell_type" in adata_st.obs.columns:
 else:
     print("NMF niche-celltype proportions table could not be generated as 'cell_type' column is missing.")
 
+# AnnData HDF5 serialization treats "/" in dataframe column names as nested paths.
+for obsm_key in list(adata_st.obsm.keys()):
+    obsm_value = adata_st.obsm[obsm_key]
+    if isinstance(obsm_value, pd.DataFrame):
+        sanitized_columns = pd.Index(obsm_value.columns.astype(str)).str.replace("/", "_", regex=False)
+        if not sanitized_columns.equals(obsm_value.columns):
+            obsm_value = obsm_value.copy()
+            obsm_value.columns = sanitized_columns
+            adata_st.obsm[obsm_key] = obsm_value
+
 adata_st.write(nmf_h5ad_path)
 print(f"NMF annotated h5ad saved to: {nmf_h5ad_path}")
 
