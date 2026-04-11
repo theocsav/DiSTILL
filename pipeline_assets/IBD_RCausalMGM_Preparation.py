@@ -26,6 +26,7 @@ DEFAULT_NEIGHBORHOOD_H5AD = (
 DEFAULT_BASE_DIR = "/blue/kejun.huang/tan.m/IBDCosMx_scRNAseq/CosMx/Post-NMF_Analysis/RCausalMGM"
 DEFAULT_NICHE_DIR = os.path.join(DEFAULT_BASE_DIR, "NicheCompositions")
 DEFAULT_NEIGHBORHOOD_DIR = os.path.join(DEFAULT_BASE_DIR, "NeighborhoodInteractions")
+DISEASE_STATE_COLUMNS = ("Disease/Health State", "Disease_State", "disease_state", "disease")
 
 
 def _coerce_field_of_view_label(value: object) -> str:
@@ -35,6 +36,13 @@ def _coerce_field_of_view_label(value: object) -> str:
 def _field_of_view_to_disease_state(value: object) -> str:
     text = _coerce_field_of_view_label(value)
     return text.rsplit("_", 1)[0] if "_" in text else text
+
+
+def _get_disease_state_column(columns: pd.Index | list[str]) -> str | None:
+    for column in DISEASE_STATE_COLUMNS:
+        if column in columns:
+            return column
+    return None
 
 
 def calculate_niche_compositions_percent(input_path: str, output_path: str) -> None:
@@ -52,6 +60,9 @@ def calculate_niche_compositions_percent(input_path: str, output_path: str) -> N
         df["field_of_view"] = df["patient"].astype(str) + "_" + df["fov"].astype(str)
     else:
         df["field_of_view"] = df["unique_cell_id"].astype(str).str.rsplit("_", n=1).str[0]
+    disease_state_column = _get_disease_state_column(adata.obs.columns)
+    if disease_state_column is not None:
+        df["Disease/Health State"] = adata.obs.loc[df.index, disease_state_column].astype(str).values
     niche_counts = pd.pivot_table(
         df,
         index="field_of_view",
@@ -60,6 +71,12 @@ def calculate_niche_compositions_percent(input_path: str, output_path: str) -> N
         fill_value=0,
     )
     niche_percent = niche_counts.div(niche_counts.sum(axis=1), axis=0)
+    if "Disease/Health State" in df.columns:
+        disease_state_by_fov = (
+            df.groupby("field_of_view")["Disease/Health State"]
+            .agg(lambda series: series.dropna().astype(str).iloc[0] if not series.dropna().empty else "")
+        )
+        niche_percent["Disease/Health State"] = disease_state_by_fov.reindex(niche_percent.index).fillna("")
     niche_percent.to_csv(output_path)
 
 
@@ -68,10 +85,16 @@ def transform_and_rename(input_path: str, output_path: str) -> None:
     df = pd.read_csv(input_path)
     if "field_of_view" not in df.columns:
         raise RuntimeError("field_of_view column not found in niche composition output.")
+    disease_state_series = None
+    if "Disease/Health State" in df.columns:
+        disease_state_series = df.set_index("field_of_view")["Disease/Health State"]
+        df = df.drop(columns=["Disease/Health State"])
     df = df.set_index("field_of_view")
     rename_dict = {col: f"Niche_{col}" for col in df.columns}
     df.rename(columns=rename_dict, inplace=True)
     df_transformed = -np.log(df + 1e-9)
+    if disease_state_series is not None:
+        df_transformed["Disease/Health State"] = disease_state_series.reindex(df_transformed.index).fillna("")
     df_transformed.to_csv(output_path)
 
 
@@ -80,7 +103,8 @@ def add_disease_state(input_path: str, output_path: str) -> None:
     df = pd.read_csv(input_path)
     if "field_of_view" not in df.columns:
         raise RuntimeError("field_of_view column not found in niche composition output.")
-    df["Disease/Health State"] = df["field_of_view"].apply(_field_of_view_to_disease_state)
+    if "Disease/Health State" not in df.columns:
+        df["Disease/Health State"] = df["field_of_view"].apply(_field_of_view_to_disease_state)
     df.to_csv(output_path, index=False)
 
 
@@ -91,8 +115,8 @@ def compute_neighborhood_enrichment(input_path: str, output_path: str) -> None:
     missing = required_cols - set(adata.obs.columns)
     if missing:
         raise RuntimeError(f"Missing required obs columns: {', '.join(sorted(missing))}")
-    adata.obs["Disease_State"] = adata.obs["patient"].astype(str).str[:2]
     adata.obs["unique_fov"] = adata.obs["patient"].astype(str) + "_" + adata.obs["fov"].astype(str)
+    disease_state_column = _get_disease_state_column(adata.obs.columns)
     coords_um = adata.obs[["CenterX_global_px", "CenterY_global_px"]].values.astype("float64")
     nmf_labels = adata.obs["NMF_factor"]
     cell_diameters_um = 2 * np.sqrt(adata.obs["Area"] / np.pi)
@@ -128,6 +152,13 @@ def compute_neighborhood_enrichment(input_path: str, output_path: str) -> None:
         expected_matrix = pd.DataFrame(expected_matrix, index=all_factor_names, columns=all_factor_names)
         enrichment = np.log2((interaction_matrix + 1) / (expected_matrix + 1))
         row = {"field_of_view": fov_id}
+        if disease_state_column is not None:
+            fov_disease_values = (
+                adata.obs.loc[cell_indices, disease_state_column]
+                .dropna()
+                .astype(str)
+            )
+            row["Disease/Health State"] = fov_disease_values.iloc[0] if not fov_disease_values.empty else ""
         for i, fi in enumerate(all_factor_names, 1):
             for j, fj in enumerate(all_factor_names, 1):
                 row[f"enrichment_{i}-{j}"] = enrichment.loc[fi, fj]
@@ -139,7 +170,8 @@ def compute_neighborhood_enrichment(input_path: str, output_path: str) -> None:
 def add_neighborhood_disease_state(input_path: str, output_path: str) -> None:
     """Add Disease/Health State column for neighborhood enrichment outputs."""
     df = pd.read_csv(input_path)
-    df["Disease/Health State"] = df["field_of_view"].apply(_field_of_view_to_disease_state)
+    if "Disease/Health State" not in df.columns:
+        df["Disease/Health State"] = df["field_of_view"].apply(_field_of_view_to_disease_state)
     df.to_csv(output_path, index=False)
 
 
