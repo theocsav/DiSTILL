@@ -17,6 +17,12 @@
   "post_nmf_notebook_path": "pipeline_assets/IBD_Post_NMF_Analysis.ipynb",
   "rcausal_mode": "python",
   "rcausal_script_path": "pipeline_assets/IBD_RCausalMGM_Preparation.py",
+  "rcausal_support_files": [
+    "pipeline_assets/rCausalMGM_Rscript_NeighborhoodInteractions.R",
+    "pipeline_assets/rCausalMGM_Rscript_NicheComposition.R",
+    "pipeline_assets/rCausalMGM_Rscript_NicheGeneFeatures.R"
+  ],
+  "rcausal_args": ["--run-r-scripts", "--r-script-dir", ".", "--rscript-bin", "Rscript", "--r-num-boots", "20"],
   "mlp_script_path": "pipeline_assets/IBD_MLP_44Features.py",
   "report_title": "NicheRunner Kidney HD/SSc Run",
   "preflight_slurm": {

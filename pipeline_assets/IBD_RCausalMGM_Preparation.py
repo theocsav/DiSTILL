@@ -2,6 +2,9 @@
 import argparse
 import os
 import re
+import shutil
+import subprocess
+from pathlib import Path
 
 import anndata as ad
 import numpy as np
@@ -191,6 +194,29 @@ def drop_collinear_columns(input_path: str, output_path: str) -> None:
     df_reduced.to_csv(output_path, index=False)
 
 
+def run_r_causalmgm_script(
+    script_path: Path,
+    input_path: str,
+    output_dir: str,
+    rscript_bin: str,
+    num_boots: int,
+) -> None:
+    if not script_path.exists():
+        raise FileNotFoundError(f"rCausalMGM support script not found: {script_path}")
+    resolved_rscript = shutil.which(rscript_bin) or rscript_bin
+    command = [
+        resolved_rscript,
+        str(script_path),
+        "--input-file",
+        input_path,
+        "--output-dir",
+        output_dir,
+        "--num-boots",
+        str(num_boots),
+    ]
+    subprocess.run(command, check=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="RCausalMGM preparation steps.")
     parser.add_argument("--output-dir", default=None, help="Base output directory for RCausalMGM artifacts.")
@@ -213,6 +239,27 @@ def main() -> None:
         "--neighborhood-h5ad",
         default=DEFAULT_NEIGHBORHOOD_H5AD,
         help="Input h5ad for neighborhood interaction calculations.",
+    )
+    parser.add_argument(
+        "--run-r-scripts",
+        action="store_true",
+        help="Run the original rCausalMGM R analyses after Python preprocessing.",
+    )
+    parser.add_argument(
+        "--r-script-dir",
+        default=".",
+        help="Directory containing the rCausalMGM R scripts copied into the run directory.",
+    )
+    parser.add_argument(
+        "--rscript-bin",
+        default="Rscript",
+        help="Rscript executable to use for running rCausalMGM analyses.",
+    )
+    parser.add_argument(
+        "--r-num-boots",
+        type=int,
+        default=20,
+        help="Bootstrap iterations passed to the rCausalMGM R scripts.",
     )
     args = parser.parse_args()
 
@@ -242,6 +289,32 @@ def main() -> None:
 
     no_collinear_path = neighborhood_with_disease.replace(".csv", "_noCollinear.csv")
     drop_collinear_columns(neighborhood_with_disease, no_collinear_path)
+
+    if args.run_r_scripts:
+        r_script_dir = Path(args.r_script_dir)
+        run_r_causalmgm_script(
+            r_script_dir / "rCausalMGM_Rscript_NicheComposition.R",
+            niche_final_path,
+            niche_output_dir,
+            args.rscript_bin,
+            args.r_num_boots,
+        )
+        run_r_causalmgm_script(
+            r_script_dir / "rCausalMGM_Rscript_NeighborhoodInteractions.R",
+            no_collinear_path,
+            neighborhood_output_dir,
+            args.rscript_bin,
+            args.r_num_boots,
+        )
+        niche_gene_input = Path(base_dir) / "Niche-gene" / "Niche-GeneFeatures_15eachDisease_24significant.csv"
+        if niche_gene_input.exists():
+            run_r_causalmgm_script(
+                r_script_dir / "rCausalMGM_Rscript_NicheGeneFeatures.R",
+                str(niche_gene_input),
+                str(niche_gene_input.parent),
+                args.rscript_bin,
+                args.r_num_boots,
+            )
 
 
 if __name__ == "__main__":

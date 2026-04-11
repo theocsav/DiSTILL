@@ -162,6 +162,10 @@ def validate_cli_config(config, root, check_paths=True):
                 script_path = resolve_template(root, script_path)
                 if check_paths and not script_path.exists():
                     errors.append(f"RCausalMGM script not found: {script_path}")
+            for support_path in config.get("rcausal_support_files", []):
+                resolved_support = resolve_template(root, support_path)
+                if check_paths and not resolved_support.exists():
+                    errors.append(f"RCausalMGM support file not found: {resolved_support}")
 
     if "mlp" in stages:
         script_path = resolve_template(root, config.get("mlp_script_path", DEFAULT_MLP_SCRIPT))
@@ -179,6 +183,16 @@ def copy_resource(source: Path, run_dir: Path) -> Path:
     destination = run_dir / source.name
     shutil.copy2(source, destination)
     return destination
+
+
+def copy_support_resources(root: Path, run_dir: Path, resource_paths: list[str]) -> list[Path]:
+    copied = []
+    for resource_path in resource_paths:
+        source = resolve_template(root, resource_path)
+        if not source.exists():
+            raise FileNotFoundError(f"Support resource not found: {source}")
+        copied.append(copy_resource(source, run_dir))
+    return copied
 
 
 def build_papermill_command(input_path: Path, output_path: Path, parameters: dict) -> str:
@@ -713,6 +727,9 @@ def main():
             if not script_source.exists():
                 raise FileNotFoundError(f"RCausalMGM script not found: {script_source}")
             script_copy = copy_resource(script_source, run_dir_path)
+            support_files = config.get("rcausal_support_files", [])
+            if support_files:
+                copy_support_resources(root, run_dir_path, list(support_files))
             args_list = build_rcausal_args(config, output_dir)
             extra_args = " ".join(shell_quote(arg) for arg in args_list)
             stage_commands.append(("rcausal_mgm", f"python {shell_quote(script_copy)} {extra_args}".strip()))
