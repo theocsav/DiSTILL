@@ -156,6 +156,43 @@ try:
     # Save confusion matrix to a CSV file
     cm_df.to_csv(os.path.join(output_dir, 'confusion_matrix.csv'))
 
+    print("\n--- Permutation Importance ---")
+    best_pipeline.fit(X, y)
+    pi = permutation_importance(
+        best_pipeline,
+        X,
+        y,
+        scoring='f1_weighted',
+        n_repeats=200,
+        random_state=42,
+        n_jobs=-1,
+    )
+    pi_df = pd.DataFrame({
+        'feature': X.columns,
+        'importance_mean': pi.importances_mean,
+        'importance_std': pi.importances_std,
+    }).sort_values('importance_mean', ascending=False)
+    pi_df.to_csv(os.path.join(output_dir, 'permutation_importance.csv'), index=False)
+    print(pi_df.head(20).to_string(index=False))
+
+    top_n = min(20, len(pi_df))
+    pi_plot = pi_df.head(top_n).iloc[::-1]
+    plt.figure(figsize=(10, max(6, top_n * 0.35)))
+    colors = ['#1f77b4' if value >= 0 else '#d62728' for value in pi_plot['importance_mean']]
+    plt.barh(
+        pi_plot['feature'],
+        pi_plot['importance_mean'],
+        xerr=pi_plot['importance_std'],
+        color=colors,
+        edgecolor='black',
+        alpha=0.85,
+    )
+    plt.xlabel('Mean decrease in weighted F1 after permutation')
+    plt.ylabel('Feature')
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'permutation_importance_top20.png'), dpi=200, bbox_inches='tight')
+    plt.close()
+
 finally:
     # --- Restore original stdout ---
     sys.stdout.close()
