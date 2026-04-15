@@ -33,6 +33,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.model_selection import StratifiedGroupKFold
+from sklearn.model_selection import LeaveOneGroupOut
 from sklearn.preprocessing import StandardScaler
 from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import Pipeline
@@ -49,7 +50,7 @@ from scipy.sparse import issparse
 from sklearn.feature_selection import mutual_info_classif
 import shap
 
-from sklearn.model_selection import StratifiedGroupKFold, RandomizedSearchCV
+from sklearn.model_selection import StratifiedGroupKFold, LeaveOneGroupOut, RandomizedSearchCV
 from sklearn.neural_network import MLPClassifier
 from sklearn.metrics import confusion_matrix, classification_report, balanced_accuracy_score, precision_score, recall_score, f1_score
 from sklearn.pipeline import Pipeline
@@ -59,6 +60,7 @@ from scipy.stats import loguniform
 # --- Define the output directory ---
 feature_input_dir = os.environ.get("NICHERUNNER_OUTPUT_DIR", "/blue/kejun.huang/tan.m/IBDCosMx_scRNAseq/CosMx/Post-NMF_Analysis")
 output_dir = os.environ.get("NICHERUNNER_MLP_OUTPUT_DIR", os.path.join(feature_input_dir, "MLP_44Features"))
+cv_mode = os.environ.get("NICHERUNNER_CV_MODE", "sgkf3").strip().lower()
 os.makedirs(output_dir, exist_ok=True)
 output_path = os.path.join(output_dir, 'mlp_results.txt')
 
@@ -73,8 +75,20 @@ try:
     y = pd.read_parquet(os.path.join(feature_input_dir, 'targets_y.parquet')).squeeze()
     groups = pd.read_parquet(os.path.join(feature_input_dir, 'groups.parquet')).squeeze()
 
+    if cv_mode == "loocv":
+        cv_splitter = LeaveOneGroupOut()
+        cv_label = "Leave-One-Group-Out Cross-Validation"
+        split_iterator = lambda: cv_splitter.split(X, y, groups)
+        n_cv_splits = groups.nunique()
+    else:
+        cv_splitter = StratifiedGroupKFold(n_splits=3, shuffle=True, random_state=42)
+        cv_label = "3-Fold Stratified Group Cross-Validation"
+        split_iterator = lambda: cv_splitter.split(X, y, groups)
+        n_cv_splits = 3
+
     # --- 4. Hyperparameter Tuning and Cross-Validation ---
     print("--- Starting Hyperparameter Search with RandomizedSearchCV ---")
+    print(f"CV mode: {cv_mode} ({cv_label})")
     pipe = Pipeline([
         ('scaler', StandardScaler()),
         ('mlp', MLPClassifier(
@@ -95,9 +109,8 @@ try:
         'mlp__alpha': loguniform(1e-5, 1e-1),
         'mlp__batch_size': [2, 4, 8, 16]
     }
-    sgkf = StratifiedGroupKFold(n_splits=3, shuffle=True, random_state=42)
     random_search = RandomizedSearchCV(
-        estimator=pipe, param_distributions=param_distributions, n_iter=30000, cv=sgkf,
+        estimator=pipe, param_distributions=param_distributions, n_iter=30000, cv=cv_splitter,
         scoring='f1_weighted', n_jobs=-1, random_state=42, verbose=1
     )
     random_search.fit(X, y, groups=groups)
@@ -111,7 +124,7 @@ try:
         json.dump(random_search.best_params_, f, indent=4)
 
     # --- 5. Run a final cross-validation with the best model ---
-    print("\n--- Running 3-Fold Stratified Group Cross-Validation with Best Model ---")
+    print(f"\n--- Running {cv_label} with Best Model ---")
     best_pipeline = random_search.best_estimator_
     all_y_true = []
     all_y_pred = []
@@ -121,8 +134,8 @@ try:
     fold_f1_scores = []
     all_labels = sorted(y.unique())
 
-    for i, (train_idx, test_idx) in enumerate(sgkf.split(X, y, groups)):
-        print(f"--- Processing Fold {i+1}/3 ---")
+    for i, (train_idx, test_idx) in enumerate(split_iterator()):
+        print(f"--- Processing Fold {i+1}/{n_cv_splits} ---")
         X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
         y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
         best_pipeline.fit(X_train, y_train)
