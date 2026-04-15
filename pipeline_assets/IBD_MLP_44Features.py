@@ -39,7 +39,6 @@ from sklearn.pipeline import Pipeline
 from scipy.stats import loguniform
 from sklearn.model_selection import RandomizedSearchCV
 from sklearn.metrics import ConfusionMatrixDisplay
-from sklearn.inspection import permutation_importance
 from sklearn.metrics import confusion_matrix
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
@@ -48,6 +47,7 @@ import statsmodels.api as sm
 import matplotlib.ticker as ticker
 from scipy.sparse import issparse
 from sklearn.feature_selection import mutual_info_classif
+import shap
 
 from sklearn.model_selection import StratifiedGroupKFold, RandomizedSearchCV
 from sklearn.neural_network import MLPClassifier
@@ -156,41 +156,98 @@ try:
     # Save confusion matrix to a CSV file
     cm_df.to_csv(os.path.join(output_dir, 'confusion_matrix.csv'))
 
-    print("\n--- Permutation Importance ---")
-    best_pipeline.fit(X, y)
-    pi = permutation_importance(
-        best_pipeline,
-        X,
-        y,
-        scoring='f1_weighted',
-        n_repeats=200,
-        random_state=42,
-        n_jobs=-1,
-    )
-    pi_df = pd.DataFrame({
-        'feature': X.columns,
-        'importance_mean': pi.importances_mean,
-        'importance_std': pi.importances_std,
-    }).sort_values('importance_mean', ascending=False)
-    pi_df.to_csv(os.path.join(output_dir, 'permutation_importance.csv'), index=False)
-    print(pi_df.head(20).to_string(index=False))
+    # Legacy permutation-importance block retained for reference.
+    # print("\n--- Permutation Importance ---")
+    # best_pipeline.fit(X, y)
+    # pi = permutation_importance(
+    #     best_pipeline,
+    #     X,
+    #     y,
+    #     scoring='f1_weighted',
+    #     n_repeats=200,
+    #     random_state=42,
+    #     n_jobs=-1,
+    # )
+    # pi_df = pd.DataFrame({
+    #     'feature': X.columns,
+    #     'importance_mean': pi.importances_mean,
+    #     'importance_std': pi.importances_std,
+    # }).sort_values('importance_mean', ascending=False)
+    # pi_df.to_csv(os.path.join(output_dir, 'permutation_importance.csv'), index=False)
+    # print(pi_df.head(20).to_string(index=False))
+    #
+    # top_n = min(20, len(pi_df))
+    # pi_plot = pi_df.head(top_n).iloc[::-1]
+    # plt.figure(figsize=(10, max(6, top_n * 0.35)))
+    # colors = ['#1f77b4' if value >= 0 else '#d62728' for value in pi_plot['importance_mean']]
+    # plt.barh(
+    #     pi_plot['feature'],
+    #     pi_plot['importance_mean'],
+    #     xerr=pi_plot['importance_std'],
+    #     color=colors,
+    #     edgecolor='black',
+    #     alpha=0.85,
+    # )
+    # plt.xlabel('Mean decrease in weighted F1 after permutation')
+    # plt.ylabel('Feature')
+    # plt.tight_layout()
+    # plt.savefig(os.path.join(output_dir, 'permutation_importance_top20.png'), dpi=200, bbox_inches='tight')
+    # plt.close()
 
-    top_n = min(20, len(pi_df))
-    pi_plot = pi_df.head(top_n).iloc[::-1]
+    print("\n--- SHAP Analysis ---")
+    best_pipeline.fit(X, y)
+    class_labels = list(best_pipeline.classes_)
+    positive_class = 'systemic_sclerosis' if 'systemic_sclerosis' in class_labels else class_labels[-1]
+    positive_idx = class_labels.index(positive_class)
+
+    def predict_proba_fn(data):
+        frame = pd.DataFrame(data, columns=X.columns)
+        return best_pipeline.predict_proba(frame)
+
+    explainer = shap.KernelExplainer(
+        predict_proba_fn,
+        X,
+        feature_names=list(X.columns),
+    )
+    shap_values = explainer.shap_values(X, nsamples=min(200, max(50, X.shape[1] * 10)))
+
+    if isinstance(shap_values, list):
+        shap_matrix = np.asarray(shap_values[positive_idx])
+    else:
+        shap_array = np.asarray(shap_values)
+        if shap_array.ndim == 3:
+            shap_matrix = shap_array[:, :, positive_idx]
+        else:
+            shap_matrix = shap_array
+
+    shap_df = pd.DataFrame(shap_matrix, columns=X.columns, index=X.index)
+    shap_df.to_csv(os.path.join(output_dir, 'shap_values_positive_class.csv'), index=True)
+
+    shap_importance_df = pd.DataFrame({
+        'feature': X.columns,
+        'mean_abs_shap': np.abs(shap_matrix).mean(axis=0),
+        'mean_shap': shap_matrix.mean(axis=0),
+    }).sort_values('mean_abs_shap', ascending=False)
+    shap_importance_df.to_csv(os.path.join(output_dir, 'shap_importance.csv'), index=False)
+    print(f"Positive class used for SHAP: {positive_class}")
+    print(shap_importance_df.head(20).to_string(index=False))
+
+    top_n = min(20, len(shap_importance_df))
+    shap_plot = shap_importance_df.head(top_n).iloc[::-1]
     plt.figure(figsize=(10, max(6, top_n * 0.35)))
-    colors = ['#1f77b4' if value >= 0 else '#d62728' for value in pi_plot['importance_mean']]
+    colors = ['#1f77b4' if value >= 0 else '#d62728' for value in shap_plot['mean_shap']]
     plt.barh(
-        pi_plot['feature'],
-        pi_plot['importance_mean'],
-        xerr=pi_plot['importance_std'],
+        shap_plot['feature'],
+        shap_plot['mean_abs_shap'],
         color=colors,
         edgecolor='black',
         alpha=0.85,
     )
-    plt.xlabel('Mean decrease in weighted F1 after permutation')
+    plt.xlabel('Mean absolute SHAP value')
     plt.ylabel('Feature')
+    plt.title(f'SHAP feature importance for {positive_class}')
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'permutation_importance_top20.png'), dpi=200, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, 'shap_importance_top20.png'), dpi=200, bbox_inches='tight')
     plt.close()
 
 finally:
