@@ -61,6 +61,7 @@ from scipy.stats import loguniform
 feature_input_dir = os.environ.get("NICHERUNNER_OUTPUT_DIR", "/blue/kejun.huang/tan.m/IBDCosMx_scRNAseq/CosMx/Post-NMF_Analysis")
 output_dir = os.environ.get("NICHERUNNER_MLP_OUTPUT_DIR", os.path.join(feature_input_dir, "MLP_44Features"))
 cv_mode = os.environ.get("NICHERUNNER_CV_MODE", "sgkf3").strip().lower()
+feature_table_name = os.environ.get("NICHERUNNER_FEATURE_TABLE", "combined_features_filtered.parquet").strip()
 os.makedirs(output_dir, exist_ok=True)
 output_path = os.path.join(output_dir, 'mlp_results.txt')
 
@@ -71,7 +72,7 @@ sys.stdout = open(output_path, 'w')
 
 try:
     # --- Load the pre-calculated features and labels ---
-    X = pd.read_parquet(os.path.join(feature_input_dir, 'reduced_features_final_15.parquet'))
+    X = pd.read_parquet(os.path.join(feature_input_dir, feature_table_name))
     y = pd.read_parquet(os.path.join(feature_input_dir, 'targets_y.parquet')).squeeze()
     groups = pd.read_parquet(os.path.join(feature_input_dir, 'groups.parquet')).squeeze()
 
@@ -89,6 +90,7 @@ try:
     # --- 4. Hyperparameter Tuning and Cross-Validation ---
     print("--- Starting Hyperparameter Search with RandomizedSearchCV ---")
     print(f"CV mode: {cv_mode} ({cv_label})")
+    print(f"Feature table: {feature_table_name}")
     pipe = Pipeline([
         ('scaler', StandardScaler()),
         ('mlp', MLPClassifier(
