@@ -39,6 +39,20 @@ bolen_clon/
 docs/
 kidney_dataset/
 MLP_44Features_full
+skin_dataset/
+
+41467_2025_60034_MOESM4_ESM.zip
+CosMX_data_share_2026_4_28-20260505T173840Z-3-001.zip
+GSE128033_RAW.tar
+GSE128169_RAW.tar
+original_paper.tex
+paper.pdf
+rCausalMGM_IBD.zip
+Systemic Sclerosis Niche Interpretations.xlsx
+tmp_paper_text.txt
+top_20_genes_per_niche.csv
+top_30_genes_per_niche.csv
+top_50_genes_per_niche.csv
 
 commands_file.md
 

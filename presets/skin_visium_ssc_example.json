@@ -1,0 +1,30 @@
+{
+  "id": "skin_visium_ssc_example",
+  "label": "Skin Visium HC/SSc (draft)",
+  "organ": "skin",
+  "platform": "visium",
+  "run_name": "skin_visium_ssc",
+  "mode": "elbow_k",
+  "template_path": "pipeline_assets/scripts/IBD_3000epochs_systematicNMFapproach.py",
+  "reference_h5ad_path": "skin_dataset/processed/skin_reference.h5ad",
+  "cosmx_h5ad_path": "skin_dataset/processed/skin_visium_ssc_spatial.h5ad",
+  "cell_metadata_path": "skin_dataset/processed/skin_visium_ssc_metadata.csv",
+  "stages": ["cell2loc_nmf", "post_nmf", "rcausal_mgm", "mlp", "report"],
+  "post_nmf_mode": "papermill",
+  "post_nmf_notebook_path": "pipeline_assets/IBD_Post_NMF_Analysis.ipynb",
+  "rcausal_mode": "python",
+  "rcausal_script_path": "pipeline_assets/IBD_RCausalMGM_Preparation.py",
+  "rcausal_support_files": [
+    "pipeline_assets/rCausalMGM_Rscript_NeighborhoodInteractions.R",
+    "pipeline_assets/rCausalMGM_Rscript_NicheComposition.R",
+    "pipeline_assets/rCausalMGM_Rscript_NicheGeneFeatures.R"
+  ],
+  "rcausal_args": ["--run-r-scripts", "--r-script-dir", ".", "--rscript-bin", "Rscript", "--r-num-boots", "20"],
+  "mlp_script_path": "pipeline_assets/IBD_MLP_44Features.py",
+  "report_title": "NicheRunner Skin Visium HC/SSc Run",
+  "default_params": {
+    "mode": "elbow_k",
+    "k_min": 2,
+    "k_max": 20
+  }
+}
