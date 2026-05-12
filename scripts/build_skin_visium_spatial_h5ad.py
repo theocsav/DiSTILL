@@ -17,6 +17,7 @@ DEFAULT_INPUT_DIR = Path("skin_dataset")
 DEFAULT_OUTPUT_DIR = DEFAULT_INPUT_DIR / "processed"
 DEFAULT_DATASET_ID = "skin_visium_ssc"
 DEFAULT_EXCLUDE_PREFIXES = ("Stereo_seq_",)
+VISIUM_SPOT_DIAMETER_UM = 55.0
 IMAGE_MEMBERS = (
     "spatial/tissue_hires_image.png",
     "spatial/tissue_lowres_image.png",
@@ -102,6 +103,7 @@ def _build_obs_frame(
     positions: pd.DataFrame,
     scalefactors: dict,
     barcodes: pd.Index,
+    pseudo_fov_tile_um: float | None = None,
 ) -> pd.DataFrame:
     if "barcode" not in positions.columns:
         raise RuntimeError(f"{sample_id}: tissue_positions.csv is missing the 'barcode' column.")
@@ -123,7 +125,6 @@ def _build_obs_frame(
     positions["patient"] = sample_id
     positions["Disease_State"] = infer_disease_state(sample_id)
     positions["disease_state"] = positions["Disease_State"]
-    positions["fov"] = "1"
     positions["cell_ID"] = positions["barcode"].astype(str)
     positions["cell_id"] = positions["barcode"].astype(str)
     positions["unique_cell_id"] = sample_id + "_" + positions["barcode"].astype(str)
@@ -137,7 +138,26 @@ def _build_obs_frame(
     positions["assay_type"] = "Visium"
     positions["platform"] = "visium"
     positions["slide_ID"] = sample_id
-    positions["field_of_view"] = sample_id + "_1"
+
+    if pseudo_fov_tile_um is not None:
+        px_per_um = width / VISIUM_SPOT_DIAMETER_UM
+        tile_px = pseudo_fov_tile_um * px_per_um
+        x0 = float(positions["CenterX_global_px"].min())
+        y0 = float(positions["CenterY_global_px"].min())
+        positions["pseudo_fov_tile_um"] = float(pseudo_fov_tile_um)
+        positions["pseudo_fov_tile_px"] = float(tile_px)
+        positions["tile_x"] = np.floor((positions["CenterX_global_px"] - x0) / tile_px).astype(int)
+        positions["tile_y"] = np.floor((positions["CenterY_global_px"] - y0) / tile_px).astype(int)
+        positions["fov"] = (
+            "tile"
+            + positions["tile_x"].astype(str)
+            + "_"
+            + positions["tile_y"].astype(str)
+        )
+    else:
+        positions["fov"] = "1"
+
+    positions["field_of_view"] = sample_id + "_" + positions["fov"].astype(str)
 
     positions = positions.set_index("unique_cell_id", drop=False)
     return positions
@@ -146,6 +166,7 @@ def _build_obs_frame(
 def load_sample(
     zip_path: Path,
     output_image_dir: Path,
+    pseudo_fov_tile_um: float | None = None,
 ) -> tuple[ad.AnnData, pd.DataFrame, dict]:
     sample_id = zip_path.stem
     with zipfile.ZipFile(zip_path) as zf:
@@ -153,7 +174,13 @@ def load_sample(
         positions = _read_zip_csv(zf, f"{sample_id}/spatial/tissue_positions.csv")
         scalefactors = _read_zip_json(zf, f"{sample_id}/spatial/scalefactors_json.json")
 
-        obs = _build_obs_frame(sample_id, positions, scalefactors, adata.obs_names.astype(str))
+        obs = _build_obs_frame(
+            sample_id,
+            positions,
+            scalefactors,
+            adata.obs_names.astype(str),
+            pseudo_fov_tile_um=pseudo_fov_tile_um,
+        )
         keep_barcodes = obs["barcode"].astype(str).tolist()
         adata = adata[keep_barcodes].copy()
         adata.obs = obs.loc[[sample_id + "_" + barcode for barcode in keep_barcodes]].copy()
@@ -181,6 +208,8 @@ def load_sample(
         "spot_diameter_fullres": float(scalefactors.get("spot_diameter_fullres", 0.0)),
         "tissue_hires_scalef": float(scalefactors.get("tissue_hires_scalef", 0.0)),
         "tissue_lowres_scalef": float(scalefactors.get("tissue_lowres_scalef", 0.0)),
+        "pseudo_fov_tile_um": pseudo_fov_tile_um if pseudo_fov_tile_um is not None else "",
+        "pseudo_fov_count": int(adata.obs["field_of_view"].nunique()),
         **{f"{key}_path": value for key, value in extracted_paths.items()},
     }
     return adata, adata.obs.reset_index(drop=True), sample_manifest_row
@@ -191,6 +220,7 @@ def build_spatial_h5ad(
     output_dir: Path,
     sample_ids: list[str],
     dataset_id: str,
+    pseudo_fov_tile_um: float | None = None,
 ) -> tuple[Path, Path, Path]:
     adatas: list[ad.AnnData] = []
     metadata_frames: list[pd.DataFrame] = []
@@ -201,7 +231,11 @@ def build_spatial_h5ad(
         zip_path = input_dir / f"{sample_id}.zip"
         if not zip_path.exists():
             raise FileNotFoundError(f"Missing ZIP for sample {sample_id}: {zip_path}")
-        adata, metadata_frame, manifest_row = load_sample(zip_path, image_dir)
+        adata, metadata_frame, manifest_row = load_sample(
+            zip_path,
+            image_dir,
+            pseudo_fov_tile_um=pseudo_fov_tile_um,
+        )
         adatas.append(adata)
         metadata_frames.append(metadata_frame)
         manifest_rows.append(manifest_row)
@@ -227,6 +261,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--dataset-id", type=str, default=DEFAULT_DATASET_ID)
     parser.add_argument("--samples", nargs="+", default=None, help="Optional explicit sample IDs to include.")
+    parser.add_argument(
+        "--pseudo-fov-tile-um",
+        type=float,
+        default=None,
+        help="Optional pseudo-FOV tile size in microns. If set, assigns tiled pseudo-FOV IDs within each sample.",
+    )
     return parser.parse_args()
 
 
@@ -238,6 +278,7 @@ def main() -> None:
         output_dir=args.output_dir,
         sample_ids=sample_ids,
         dataset_id=args.dataset_id,
+        pseudo_fov_tile_um=args.pseudo_fov_tile_um,
     )
     print(f"spatial_h5ad={spatial_h5ad_path}")
     print(f"cell_metadata={metadata_csv_path}")
