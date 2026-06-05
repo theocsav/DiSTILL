@@ -1,0 +1,33 @@
+{
+  "id": "skin_visium_ssc_poisson_example",
+  "label": "Skin Visium HC/SSc (Poisson/KL NMF draft)",
+  "organ": "skin",
+  "platform": "visium",
+  "run_name": "skin_visium_ssc_poisson",
+  "mode": "poisson_redundancy_k",
+  "template_path": "pipeline_assets/scripts/IBD_3000epochs_systematicNMFapproach.py",
+  "reference_h5ad_path": "skin_dataset/processed/skin_reference.h5ad",
+  "cosmx_h5ad_path": "skin_dataset/processed/skin_visium_ssc_spatial.h5ad",
+  "cell_metadata_path": "skin_dataset/processed/skin_visium_ssc_metadata.csv",
+  "stages": ["cell2loc_nmf", "post_nmf", "rcausal_mgm", "mlp", "report"],
+  "post_nmf_mode": "papermill",
+  "post_nmf_notebook_path": "pipeline_assets/IBD_Post_NMF_Analysis.ipynb",
+  "rcausal_mode": "python",
+  "rcausal_script_path": "pipeline_assets/IBD_RCausalMGM_Preparation.py",
+  "rcausal_support_files": [
+    "pipeline_assets/rCausalMGM_Rscript_NeighborhoodInteractions.R",
+    "pipeline_assets/rCausalMGM_Rscript_NicheComposition.R",
+    "pipeline_assets/rCausalMGM_Rscript_NicheGeneFeatures.R"
+  ],
+  "rcausal_args": ["--run-r-scripts", "--r-script-dir", ".", "--rscript-bin", "Rscript", "--r-num-boots", "20"],
+  "mlp_script_path": "pipeline_assets/IBD_MLP_44Features.py",
+  "report_title": "NicheRunner Skin Visium HC/SSc Run (Poisson/KL NMF)",
+  "default_params": {
+    "mode": "poisson_redundancy_k",
+    "k_min": 2,
+    "k_max": 20,
+    "poisson_n_runs": 10,
+    "poisson_max_iter": 5000,
+    "poisson_normalize_rows_to_sum1": false
+  }
+}

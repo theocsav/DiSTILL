@@ -34,6 +34,18 @@ def test_post_nmf_with_cell2loc_does_not_require_preexisting_nmf_artifact() -> N
     assert not any("cosmx_with_nmf_path" in error for error in errors)
 
 
+def test_poisson_redundancy_mode_accepts_k_bounds() -> None:
+    config = _base_config()
+    config["mode"] = "poisson_redundancy_k"
+    config["k_min"] = 3
+    config["k_max"] = 12
+
+    errors, _warnings, _checks = validate_config(config, check_paths=False)
+
+    assert not any("mode must be" in error for error in errors)
+    assert not any("requires k_max >= k_min" in error for error in errors)
+
+
 def test_stage_data_contract_reports_missing_coords_and_morphology(monkeypatch) -> None:
     config = _base_config()
     config["cosmx_with_nmf_path"] = "/tmp/cosmx_with_nmf.h5ad"

@@ -80,6 +80,18 @@ Use `stages` in the run config to run multiple pipeline steps in one SLURM job:
 }
 ```
 
+NMF rank-selection modes:
+
+- `fixed_k`: use `n_components` or `k`
+- `elbow_k`: test `k_min..k_max` and select K by reconstruction-error elbow
+- `poisson_redundancy_k`: test `k_min..k_max` with KL / Poisson NMF and select K by lowest mean factor redundancy
+
+Optional Poisson/KL tuning keys:
+
+- `poisson_n_runs` (default `10`)
+- `poisson_max_iter` (default `5000`)
+- `poisson_normalize_rows_to_sum1` (default `false`)
+
 ## Preflight
 
 Use `POST /runs/preflight` with the same config payload to validate required fields and paths.

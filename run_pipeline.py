@@ -10,11 +10,21 @@ from pathlib import Path
 
 DEFAULT_FIXED_TEMPLATE = "pipeline_assets/scripts/IBD_3000epochs_500samples_NMF-k4.py"
 DEFAULT_ELBOW_TEMPLATE = "pipeline_assets/scripts/IBD_3000epochs_systematicNMFapproach.py"
+DEFAULT_POISSON_TEMPLATE = "pipeline_assets/scripts/IBD_3000epochs_systematicNMFapproach.py"
 DEFAULT_POST_NMF_NOTEBOOK = "pipeline_assets/IBD_Post_NMF_Analysis.ipynb"
 DEFAULT_RCAUSAL_NOTEBOOK = "pipeline_assets/IBD_RCausalMGM_Preparation.ipynb"
 DEFAULT_MLP_SCRIPT = "pipeline_assets/IBD_MLP_44Features.py"
 DEFAULT_REPORT_TITLE = "NicheRunner Run Report"
 ALLOWED_STAGES = ("cell2loc_nmf", "post_nmf", "rcausal_mgm", "mlp", "report")
+ALLOWED_MODES = ("fixed_k", "elbow_k", "poisson_redundancy_k")
+
+
+def default_template_for_mode(mode: str) -> str:
+    if mode == "fixed_k":
+        return DEFAULT_FIXED_TEMPLATE
+    if mode == "poisson_redundancy_k":
+        return DEFAULT_POISSON_TEMPLATE
+    return DEFAULT_ELBOW_TEMPLATE
 
 
 def norm_path(value):
@@ -105,8 +115,8 @@ def validate_cli_config(config, root, check_paths=True):
             errors.append(f"Path does not exist: {key} -> {value}")
 
     mode = config.get("mode", "fixed_k")
-    if mode not in ("fixed_k", "elbow_k"):
-        errors.append("mode must be 'fixed_k' or 'elbow_k'.")
+    if mode not in ALLOWED_MODES:
+        errors.append("mode must be one of: 'fixed_k', 'elbow_k', 'poisson_redundancy_k'.")
     elif mode == "fixed_k":
         if config.get("n_components") is None and config.get("k") is None:
             errors.append("Fixed-k mode requires 'n_components' or 'k'.")
@@ -124,7 +134,7 @@ def validate_cli_config(config, root, check_paths=True):
 
     template_path = config.get("template_path")
     if not template_path:
-        template_path = DEFAULT_FIXED_TEMPLATE if mode == "fixed_k" else DEFAULT_ELBOW_TEMPLATE
+        template_path = default_template_for_mode(mode)
     template_path = resolve_template(root, template_path)
     if check_paths and not template_path.exists():
         errors.append(f"Template not found: {template_path}")
@@ -602,8 +612,8 @@ def main():
             return
 
     mode = config.get("mode", "fixed_k")
-    if mode not in ("fixed_k", "elbow_k"):
-        raise ValueError("mode must be 'fixed_k' or 'elbow_k'.")
+    if mode not in ALLOWED_MODES:
+        raise ValueError("mode must be one of: 'fixed_k', 'elbow_k', 'poisson_redundancy_k'.")
 
     stages = normalize_stages(config)
     if "cell2loc_nmf" in stages:
@@ -615,7 +625,7 @@ def main():
 
     template_path = config.get("template_path")
     if not template_path:
-        template_path = DEFAULT_FIXED_TEMPLATE if mode == "fixed_k" else DEFAULT_ELBOW_TEMPLATE
+        template_path = default_template_for_mode(mode)
     template_path = resolve_template(root, template_path)
 
     if not template_path.exists():
@@ -660,6 +670,20 @@ def main():
         if k_max < k_min:
             raise ValueError("k_max must be >= k_min.")
         text = apply_assignment(text, "K_range", f"range({k_min}, {k_max + 1})", warnings)
+        selection_method = "poisson_redundancy_k" if mode == "poisson_redundancy_k" else "elbow_k"
+        text = apply_assignment(text, "nmf_selection_method", render_value(selection_method), warnings)
+        if mode == "poisson_redundancy_k":
+            if config.get("poisson_n_runs") is not None:
+                text = apply_assignment(text, "poisson_n_runs", str(int(config["poisson_n_runs"])), warnings)
+            if config.get("poisson_max_iter") is not None:
+                text = apply_assignment(text, "poisson_max_iter", str(int(config["poisson_max_iter"])), warnings)
+            if config.get("poisson_normalize_rows_to_sum1") is not None:
+                text = apply_assignment(
+                    text,
+                    "poisson_normalize_rows_to_sum1",
+                    str(bool(config["poisson_normalize_rows_to_sum1"])),
+                    warnings,
+                )
 
     patched_script_path = run_dir_path / f"{run_name}_pipeline.py"
     write_text(patched_script_path, text)

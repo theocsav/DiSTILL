@@ -753,6 +753,7 @@ export default function Home() {
                 <select value={mode} onChange={(event) => setMode(event.target.value)}>
                   <option value="fixed_k">Fixed K</option>
                   <option value="elbow_k">Elbow K</option>
+                  <option value="poisson_redundancy_k">Poisson/KL Redundancy</option>
                 </select>
               </div>
               {mode === "fixed_k" ? (

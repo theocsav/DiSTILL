@@ -18,6 +18,7 @@ from sklearn.decomposition import PCA
 from sklearn.decomposition import NMF
 from sklearn.metrics import mean_squared_error
 from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
+from sklearn.metrics.pairwise import cosine_similarity
 from scikit_posthocs import posthoc_dunn
 from kneed import KneeLocator
 from collections import defaultdict
@@ -544,50 +545,193 @@ except KeyError as e:
     print(f"ERROR: Expected key '{e}' not found in adata_st.uns for NMF input.")
     exit()
 
-# --- Elbow Method to Determine Optimal k ---
-print("\n--- Determining optimal number of NMF factors (k) using the Elbow Method ---")
-
+nmf_selection_method = "elbow_k"
 K_range = range(2, 21) # Test k from 2 to 20. Adjust range if needed.
-reconstruction_errors = []
+poisson_n_runs = 10
+poisson_max_iter = 5000
+poisson_normalize_rows_to_sum1 = False
+poisson_eps = 1e-8
 
-print("Testing k in range:", list(K_range))
-for k in tqdm(K_range, desc="Running NMF for different k"):
-    model = NMF(n_components=k, init='nndsvda', random_state=0, max_iter=500, tol=1e-3) # max_iter lowered for speed
-    W_temp = model.fit_transform(X)
-    H_temp = model.components_
-    error = model.reconstruction_err_
-    reconstruction_errors.append(error)
 
-# Use KneeLocator to find the elbow
-kneedle = KneeLocator(K_range, reconstruction_errors, S=1.0, curve="convex", direction="decreasing")
-optimal_k = kneedle.elbow
+def run_standard_nmf(matrix, k, seed=0, max_iter=1000):
+    model = NMF(n_components=k, init='nndsvda', random_state=seed, max_iter=max_iter)
+    W = model.fit_transform(matrix)
+    H = model.components_
+    return W, H, model
 
-if optimal_k is None:
-    print("\nWARNING: Could not automatically find elbow. Defaulting to k=12.")
-    optimal_k = 12
+
+def run_kl_nmf(matrix, k, seed, max_iter=5000):
+    model = NMF(
+        n_components=k,
+        init="nndsvda",
+        solver="mu",
+        beta_loss="kullback-leibler",
+        max_iter=max_iter,
+        tol=1e-4,
+        random_state=seed,
+    )
+    W = model.fit_transform(matrix)
+    H = model.components_
+    return W, H, model
+
+
+def factor_redundancy(H):
+    sim = cosine_similarity(H)
+    np.fill_diagonal(sim, 0.0)
+    return float(np.max(sim))
+
+
+optimal_k = None
+W = None
+H = None
+nmf = None
+
+if nmf_selection_method == "poisson_redundancy_k":
+    print("\n--- Determining optimal number of NMF factors (k) using Poisson/KL redundancy ---")
+    print("Testing k in range:", list(K_range))
+
+    X_poisson = np.clip(np.array(X, dtype=np.float64), 0, None) + poisson_eps
+    if poisson_normalize_rows_to_sum1:
+        X_poisson = X_poisson / (X_poisson.sum(axis=1, keepdims=True) + poisson_eps)
+
+    selection_rows = []
+    for k in tqdm(K_range, desc="Running Poisson/KL-NMF for different k"):
+        redundancies = []
+        reconstruction_errors = []
+        best_seed = None
+        best_redundancy = np.inf
+
+        for seed in tqdm(range(poisson_n_runs), desc=f"Runs for k={k}", leave=False):
+            try:
+                _W, _H, _model = run_kl_nmf(X_poisson, k, seed, max_iter=poisson_max_iter)
+                redundancy = factor_redundancy(_H)
+                redundancies.append(redundancy)
+                reconstruction_errors.append(float(_model.reconstruction_err_))
+                if redundancy < best_redundancy:
+                    best_redundancy = redundancy
+                    best_seed = seed
+            except Exception as exc:
+                print(f"[WARNING] Poisson/KL-NMF failed for k={k}, seed={seed}: {exc}")
+
+        if redundancies:
+            selection_rows.append(
+                {
+                    "K": int(k),
+                    "redundancy_mean": float(np.mean(redundancies)),
+                    "redundancy_sd": float(np.std(redundancies)),
+                    "redundancy_min": float(np.min(redundancies)),
+                    "best_seed": int(best_seed) if best_seed is not None else np.nan,
+                    "reconstruction_error_mean": float(np.mean(reconstruction_errors)),
+                    "reconstruction_error_sd": float(np.std(reconstruction_errors)),
+                    "n_successful_runs": int(len(redundancies)),
+                }
+            )
+        else:
+            selection_rows.append(
+                {
+                    "K": int(k),
+                    "redundancy_mean": np.nan,
+                    "redundancy_sd": np.nan,
+                    "redundancy_min": np.nan,
+                    "best_seed": np.nan,
+                    "reconstruction_error_mean": np.nan,
+                    "reconstruction_error_sd": np.nan,
+                    "n_successful_runs": 0,
+                }
+            )
+
+    selection_df = pd.DataFrame(selection_rows).sort_values("K")
+    selection_csv_path = os.path.join(nmf_output_dir, "NMF_Poisson_Redundancy_By_K.csv")
+    selection_df.to_csv(selection_csv_path, index=False)
+    print(f"Poisson/KL redundancy summary saved to: {selection_csv_path}")
+
+    valid_df = selection_df.dropna(subset=["redundancy_mean"])
+    if valid_df.empty:
+        raise ValueError("Poisson/KL-NMF rank selection failed for every tested K.")
+
+    best_row = valid_df.sort_values(["redundancy_mean", "K"]).iloc[0]
+    optimal_k = int(best_row["K"])
+    best_seed = int(best_row["best_seed"])
+
+    plt.figure(figsize=(10, 6))
+    plt.errorbar(
+        valid_df["K"],
+        valid_df["redundancy_mean"],
+        yerr=valid_df["redundancy_sd"],
+        marker="o",
+        capsize=4,
+    )
+    plt.axvline(optimal_k, linestyle="--", linewidth=1.5, label=f"Selected K={optimal_k}")
+    plt.title("Poisson/KL-NMF redundancy vs number of factors")
+    plt.xlabel("Number of factors (k)")
+    plt.ylabel("Mean factor redundancy")
+    plt.xticks(list(K_range))
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.legend()
+    redundancy_plot_path = os.path.join(nmf_output_dir, "NMF_Poisson_Redundancy_vs_K.png")
+    plt.savefig(redundancy_plot_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Poisson/KL redundancy plot saved to: {redundancy_plot_path}")
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(valid_df["K"], valid_df["reconstruction_error_mean"], marker="o")
+    plt.axvline(optimal_k, linestyle="--", linewidth=1.5, label=f"Selected K={optimal_k}")
+    plt.title("Poisson/KL-NMF reconstruction error vs number of factors")
+    plt.xlabel("Number of factors (k)")
+    plt.ylabel("Mean reconstruction error")
+    plt.xticks(list(K_range))
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.legend()
+    recon_plot_path = os.path.join(nmf_output_dir, "NMF_Poisson_Reconstruction_Error_vs_K.png")
+    plt.savefig(recon_plot_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Poisson/KL reconstruction error plot saved to: {recon_plot_path}")
+
+    diagnostics_path = os.path.join(nmf_output_dir, "NMF_Poisson_Selected_K.txt")
+    with open(diagnostics_path, "w", encoding="utf-8") as handle:
+        handle.write(f"selection_method: {nmf_selection_method}\n")
+        handle.write(f"selected_k: {optimal_k}\n")
+        handle.write(f"best_seed: {best_seed}\n")
+        handle.write(best_row.to_string())
+    print(f"Selected-K diagnostics saved to: {diagnostics_path}")
+
+    print(f"\n--- Performing final Poisson/KL-NMF with k={optimal_k} components and seed={best_seed} ---")
+    W, H, nmf = run_kl_nmf(X_poisson, optimal_k, best_seed, max_iter=poisson_max_iter)
 else:
-    print(f"\n? Optimal number of factors (k) found at: {optimal_k}")
+    print("\n--- Determining optimal number of NMF factors (k) using the Elbow Method ---")
+    reconstruction_errors = []
 
-# Plot and save the elbow plot
-plt.figure(figsize=(10, 6))
-kneedle.plot_knee()
-plt.title("NMF Elbow Method for Optimal k")
-plt.xlabel("Number of factors (k)")
-plt.ylabel("Reconstruction Error")
-plt.xticks(K_range)
-plt.grid(True, linestyle='--', alpha=0.6)
-elbow_plot_path = os.path.join(nmf_output_dir, "NMF_Elbow_Plot.png")
-plt.savefig(elbow_plot_path, dpi=300, bbox_inches='tight')
-plt.close()
-print(f"Elbow plot saved to: {elbow_plot_path}")
-# --- End of Elbow Method ---
+    print("Testing k in range:", list(K_range))
+    for k in tqdm(K_range, desc="Running NMF for different k"):
+        _W, _H, _model = run_standard_nmf(X, k, seed=0, max_iter=500)
+        reconstruction_errors.append(_model.reconstruction_err_)
 
+    kneedle = KneeLocator(K_range, reconstruction_errors, S=1.0, curve="convex", direction="decreasing")
+    optimal_k = kneedle.elbow
 
-# --- Final NMF Run with Optimal k ---
-print(f"\n--- Performing final NMF with k={optimal_k} components ---")
-nmf = NMF(n_components=optimal_k, init='nndsvda', random_state=0, max_iter=1000)
-W = nmf.fit_transform(X)  # cells � factors
-H = nmf.components_       # factors � cell types
+    if optimal_k is None:
+        print("\nWARNING: Could not automatically find elbow. Defaulting to k=12.")
+        optimal_k = 12
+    else:
+        print(f"\n? Optimal number of factors (k) found at: {optimal_k}")
+
+    plt.figure(figsize=(10, 6))
+    kneedle.plot_knee()
+    plt.title("NMF Elbow Method for Optimal k")
+    plt.xlabel("Number of factors (k)")
+    plt.ylabel("Reconstruction Error")
+    plt.xticks(K_range)
+    plt.grid(True, linestyle='--', alpha=0.6)
+    elbow_plot_path = os.path.join(nmf_output_dir, "NMF_Elbow_Plot.png")
+    plt.savefig(elbow_plot_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Elbow plot saved to: {elbow_plot_path}")
+
+    print(f"\n--- Performing final NMF with k={optimal_k} components ---")
+    W = None
+    H = None
+    nmf = None
+    W, H, nmf = run_standard_nmf(X, optimal_k, seed=0, max_iter=1000)
 
 print("? Final NMF factorization complete.")
 print(f"Shape of W matrix (cells x factors): {W.shape}")
