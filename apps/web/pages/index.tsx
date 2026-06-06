@@ -101,6 +101,7 @@ export default function Home() {
   const [nComponents, setNComponents] = useState(4);
   const [kMin, setKMin] = useState(2);
   const [kMax, setKMax] = useState(20);
+  const [poissonImprovementTarget, setPoissonImprovementTarget] = useState(0.95);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [cosmxPath, setCosmxPath] = useState("");
   const [cellMetadataPath, setCellMetadataPath] = useState("");
@@ -204,6 +205,7 @@ export default function Home() {
     setNComponents(Number(defaults.n_components ?? 4));
     setKMin(Number(defaults.k_min ?? 2));
     setKMax(Number(defaults.k_max ?? 20));
+    setPoissonImprovementTarget(Number(defaults.poisson_cumulative_improvement_target ?? 0.95));
 
     const resources = selectedPreset.default_resources || {};
     setSlurmTime((resources.time as string) || "96h");
@@ -325,6 +327,9 @@ export default function Home() {
     } else {
       config.k_min = kMin;
       config.k_max = kMax;
+      if (mode === "poisson_cumulative_improvement_k") {
+        config.poisson_cumulative_improvement_target = poissonImprovementTarget;
+      }
     }
 
     const resolvedCosmx =
@@ -754,6 +759,7 @@ export default function Home() {
                   <option value="fixed_k">Fixed K</option>
                   <option value="elbow_k">Elbow K</option>
                   <option value="poisson_redundancy_k">Poisson/KL Redundancy</option>
+                  <option value="poisson_cumulative_improvement_k">Poisson/KL Cumulative Improvement</option>
                 </select>
               </div>
               {mode === "fixed_k" ? (
@@ -788,6 +794,19 @@ export default function Home() {
                   </div>
                 </div>
               )}
+              {mode === "poisson_cumulative_improvement_k" ? (
+                <div>
+                  <label>Cumulative Improvement Target</label>
+                  <input
+                    type="number"
+                    min={0.01}
+                    max={1}
+                    step={0.01}
+                    value={poissonImprovementTarget}
+                    onChange={(event) => setPoissonImprovementTarget(Number(event.target.value))}
+                  />
+                </div>
+              ) : null}
             </div>
 
             <div className="row">

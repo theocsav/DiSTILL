@@ -16,13 +16,13 @@ DEFAULT_RCAUSAL_NOTEBOOK = "pipeline_assets/IBD_RCausalMGM_Preparation.ipynb"
 DEFAULT_MLP_SCRIPT = "pipeline_assets/IBD_MLP_44Features.py"
 DEFAULT_REPORT_TITLE = "NicheRunner Run Report"
 ALLOWED_STAGES = ("cell2loc_nmf", "post_nmf", "rcausal_mgm", "mlp", "report")
-ALLOWED_MODES = ("fixed_k", "elbow_k", "poisson_redundancy_k")
+ALLOWED_MODES = ("fixed_k", "elbow_k", "poisson_redundancy_k", "poisson_cumulative_improvement_k")
 
 
 def default_template_for_mode(mode: str) -> str:
     if mode == "fixed_k":
         return DEFAULT_FIXED_TEMPLATE
-    if mode == "poisson_redundancy_k":
+    if mode in ("poisson_redundancy_k", "poisson_cumulative_improvement_k"):
         return DEFAULT_POISSON_TEMPLATE
     return DEFAULT_ELBOW_TEMPLATE
 
@@ -116,7 +116,7 @@ def validate_cli_config(config, root, check_paths=True):
 
     mode = config.get("mode", "fixed_k")
     if mode not in ALLOWED_MODES:
-        errors.append("mode must be one of: 'fixed_k', 'elbow_k', 'poisson_redundancy_k'.")
+        errors.append("mode must be one of: 'fixed_k', 'elbow_k', 'poisson_redundancy_k', 'poisson_cumulative_improvement_k'.")
     elif mode == "fixed_k":
         if config.get("n_components") is None and config.get("k") is None:
             errors.append("Fixed-k mode requires 'n_components' or 'k'.")
@@ -125,6 +125,10 @@ def validate_cli_config(config, root, check_paths=True):
         k_max = int(config.get("k_max", 20))
         if k_max < k_min:
             errors.append("k_max must be >= k_min.")
+        if mode == "poisson_cumulative_improvement_k":
+            target = float(config.get("poisson_cumulative_improvement_target", 0.95))
+            if target <= 0 or target > 1:
+                errors.append("poisson_cumulative_improvement_target must be in the interval (0, 1].")
 
     try:
         stages = normalize_stages(config)
@@ -619,7 +623,7 @@ def main():
 
     mode = config.get("mode", "fixed_k")
     if mode not in ALLOWED_MODES:
-        raise ValueError("mode must be one of: 'fixed_k', 'elbow_k', 'poisson_redundancy_k'.")
+        raise ValueError("mode must be one of: 'fixed_k', 'elbow_k', 'poisson_redundancy_k', 'poisson_cumulative_improvement_k'.")
 
     stages = normalize_stages(config)
     if "cell2loc_nmf" in stages:
@@ -676,9 +680,14 @@ def main():
         if k_max < k_min:
             raise ValueError("k_max must be >= k_min.")
         text = apply_assignment(text, "K_range", f"range({k_min}, {k_max + 1})", warnings)
-        selection_method = "poisson_redundancy_k" if mode == "poisson_redundancy_k" else "elbow_k"
-        text = apply_assignment(text, "nmf_selection_method", render_value(selection_method), warnings)
         if mode == "poisson_redundancy_k":
+            selection_method = "poisson_redundancy_k"
+        elif mode == "poisson_cumulative_improvement_k":
+            selection_method = "poisson_cumulative_improvement_k"
+        else:
+            selection_method = "elbow_k"
+        text = apply_assignment(text, "nmf_selection_method", render_value(selection_method), warnings)
+        if mode in ("poisson_redundancy_k", "poisson_cumulative_improvement_k"):
             if config.get("poisson_n_runs") is not None:
                 text = apply_assignment(text, "poisson_n_runs", str(int(config["poisson_n_runs"])), warnings)
             if config.get("poisson_max_iter") is not None:
@@ -690,6 +699,13 @@ def main():
                     str(bool(config["poisson_normalize_rows_to_sum1"])),
                     warnings,
                 )
+        if mode == "poisson_cumulative_improvement_k" and config.get("poisson_cumulative_improvement_target") is not None:
+            text = apply_assignment(
+                text,
+                "poisson_cumulative_improvement_target",
+                str(float(config["poisson_cumulative_improvement_target"])),
+                warnings,
+            )
 
     patched_script_path = run_dir_path / f"{run_name}_pipeline.py"
     write_text(patched_script_path, text)

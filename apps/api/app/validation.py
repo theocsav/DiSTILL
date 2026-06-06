@@ -11,7 +11,7 @@ from .storage import enforce_allowed_path
 RAW_STAGE_REQUIRED_KEYS = ("cosmx_h5ad_path", "reference_h5ad_path", "cell_metadata_path")
 PATH_KEYS = RAW_STAGE_REQUIRED_KEYS + ("cosmx_with_nmf_path", "ref_model_dir")
 ALLOWED_STAGES = ("cell2loc_nmf", "post_nmf", "rcausal_mgm", "mlp", "report")
-ALLOWED_MODES = ("fixed_k", "elbow_k", "poisson_redundancy_k")
+ALLOWED_MODES = ("fixed_k", "elbow_k", "poisson_redundancy_k", "poisson_cumulative_improvement_k")
 DEFAULT_POST_NMF_NOTEBOOK = "pipeline_assets/IBD_Post_NMF_Analysis.ipynb"
 DEFAULT_RCAUSAL_NOTEBOOK = "pipeline_assets/IBD_RCausalMGM_Preparation.ipynb"
 DEFAULT_MLP_SCRIPT = "pipeline_assets/IBD_MLP_44Features.py"
@@ -300,13 +300,17 @@ def validate_config(
     if mode == "fixed_k":
         if config.get("n_components") is None and config.get("k") is None:
             errors.append("Fixed-k mode requires n_components or k.")
-    elif mode in ("elbow_k", "poisson_redundancy_k"):
+    elif mode in ("elbow_k", "poisson_redundancy_k", "poisson_cumulative_improvement_k"):
         k_min = int(config.get("k_min", 2))
         k_max = int(config.get("k_max", 20))
         if k_max < k_min:
             errors.append(f"{mode} requires k_max >= k_min.")
+        if mode == "poisson_cumulative_improvement_k":
+            target = float(config.get("poisson_cumulative_improvement_target", 0.95))
+            if target <= 0 or target > 1:
+                errors.append("poisson_cumulative_improvement_target must be in the interval (0, 1].")
     else:
-        errors.append("mode must be fixed_k, elbow_k, or poisson_redundancy_k.")
+        errors.append("mode must be fixed_k, elbow_k, poisson_redundancy_k, or poisson_cumulative_improvement_k.")
 
     output_dir = config.get("output_dir")
     if output_dir:

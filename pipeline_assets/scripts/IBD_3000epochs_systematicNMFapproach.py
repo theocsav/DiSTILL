@@ -550,6 +550,7 @@ K_range = range(2, 21) # Test k from 2 to 20. Adjust range if needed.
 poisson_n_runs = 10
 poisson_max_iter = 5000
 poisson_normalize_rows_to_sum1 = False
+poisson_cumulative_improvement_target = 0.95
 poisson_eps = 1e-8
 
 
@@ -586,8 +587,11 @@ W = None
 H = None
 nmf = None
 
-if nmf_selection_method == "poisson_redundancy_k":
-    print("\n--- Determining optimal number of NMF factors (k) using Poisson/KL redundancy ---")
+if nmf_selection_method in ("poisson_redundancy_k", "poisson_cumulative_improvement_k"):
+    if nmf_selection_method == "poisson_redundancy_k":
+        print("\n--- Determining optimal number of NMF factors (k) using Poisson/KL redundancy ---")
+    else:
+        print("\n--- Determining optimal number of NMF factors (k) using Poisson/KL cumulative reconstruction improvement ---")
     print("Testing k in range:", list(K_range))
 
     X_poisson = np.clip(np.array(X, dtype=np.float64), 0, None) + poisson_eps
@@ -641,6 +645,18 @@ if nmf_selection_method == "poisson_redundancy_k":
             )
 
     selection_df = pd.DataFrame(selection_rows).sort_values("K")
+    if "reconstruction_error_mean" in selection_df.columns:
+        valid_recon = selection_df["reconstruction_error_mean"].dropna()
+        if not valid_recon.empty:
+            E_start = valid_recon.iloc[0]
+            E_end = valid_recon.iloc[-1]
+            denom = E_start - E_end
+            if abs(denom) < 1e-12:
+                selection_df["fraction_total_improvement"] = np.nan
+            else:
+                selection_df["fraction_total_improvement"] = (
+                    (E_start - selection_df["reconstruction_error_mean"]) / denom
+                )
     selection_csv_path = os.path.join(nmf_output_dir, "NMF_Poisson_Redundancy_By_K.csv")
     selection_df.to_csv(selection_csv_path, index=False)
     print(f"Poisson/KL redundancy summary saved to: {selection_csv_path}")
@@ -649,7 +665,26 @@ if nmf_selection_method == "poisson_redundancy_k":
     if valid_df.empty:
         raise ValueError("Poisson/KL-NMF rank selection failed for every tested K.")
 
-    best_row = valid_df.sort_values(["redundancy_mean", "K"]).iloc[0]
+    if nmf_selection_method == "poisson_redundancy_k":
+        best_row = valid_df.sort_values(["redundancy_mean", "K"]).iloc[0]
+    else:
+        if "fraction_total_improvement" not in valid_df.columns:
+            raise ValueError("Missing fraction_total_improvement for Poisson cumulative improvement selection.")
+        improving_df = valid_df.dropna(subset=["fraction_total_improvement"])
+        if improving_df.empty:
+            raise ValueError("Poisson cumulative improvement selection failed because no reconstruction error values were available.")
+        hits = improving_df.loc[
+            improving_df["fraction_total_improvement"] >= poisson_cumulative_improvement_target
+        ]
+        if hits.empty:
+            best_row = improving_df.sort_values("K").iloc[-1]
+            print(
+                f"WARNING: No K reached the cumulative improvement target of {poisson_cumulative_improvement_target:.3f}. "
+                f"Defaulting to the largest tested K={int(best_row['K'])}."
+            )
+        else:
+            best_row = hits.sort_values("K").iloc[0]
+
     optimal_k = int(best_row["K"])
     best_seed = int(best_row["best_seed"])
 
@@ -687,9 +722,35 @@ if nmf_selection_method == "poisson_redundancy_k":
     plt.close()
     print(f"Poisson/KL reconstruction error plot saved to: {recon_plot_path}")
 
+    if "fraction_total_improvement" in valid_df.columns and not valid_df["fraction_total_improvement"].isna().all():
+        plt.figure(figsize=(10, 6))
+        plt.plot(valid_df["K"], valid_df["fraction_total_improvement"], marker="o")
+        if nmf_selection_method == "poisson_cumulative_improvement_k":
+            plt.axhline(
+                poisson_cumulative_improvement_target,
+                linestyle="--",
+                linewidth=1.5,
+                color="tab:orange",
+                label=f"Target={poisson_cumulative_improvement_target:.2f}",
+            )
+        plt.axvline(optimal_k, linestyle="--", linewidth=1.5, label=f"Selected K={optimal_k}")
+        plt.title("Poisson/KL-NMF cumulative reconstruction improvement vs number of factors")
+        plt.xlabel("Number of factors (k)")
+        plt.ylabel("Fraction of total improvement achieved")
+        plt.xticks(list(K_range))
+        plt.ylim(0, 1.05)
+        plt.grid(True, linestyle='--', alpha=0.6)
+        plt.legend()
+        improvement_plot_path = os.path.join(nmf_output_dir, "NMF_Poisson_Cumulative_Improvement_vs_K.png")
+        plt.savefig(improvement_plot_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"Poisson/KL cumulative improvement plot saved to: {improvement_plot_path}")
+
     diagnostics_path = os.path.join(nmf_output_dir, "NMF_Poisson_Selected_K.txt")
     with open(diagnostics_path, "w", encoding="utf-8") as handle:
         handle.write(f"selection_method: {nmf_selection_method}\n")
+        if nmf_selection_method == "poisson_cumulative_improvement_k":
+            handle.write(f"cumulative_improvement_target: {poisson_cumulative_improvement_target}\n")
         handle.write(f"selected_k: {optimal_k}\n")
         handle.write(f"best_seed: {best_seed}\n")
         handle.write(best_row.to_string())
