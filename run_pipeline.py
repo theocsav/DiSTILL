@@ -498,6 +498,9 @@ def build_sbatch(run_dir, run_command, slurm, output_dir, run_name):
     mail_user = slurm.get("mail_user")
     mail_type = slurm.get("mail_type")
     conda_env = slurm.get("conda_env")
+    extra_modules = slurm.get("modules", [])
+    if isinstance(extra_modules, str):
+        extra_modules = [extra_modules]
     use_module_conda = slurm.get("use_module_conda")
     if use_module_conda is None:
         env_flag = os.getenv("SLURM_USE_MODULE_CONDA") or os.getenv("USE_MODULE_CONDA") or ""
@@ -536,6 +539,9 @@ def build_sbatch(run_dir, run_command, slurm, output_dir, run_name):
     ]
     if use_module_conda:
         lines.append("module load conda")
+    for module_name in extra_modules:
+        if module_name and module_name != "conda":
+            lines.append(f"module load {module_name}")
     if conda_env:
         lines += [
             "set +u",

@@ -72,6 +72,7 @@
     "qos": "kejun.huang-b",
     "mail_user": "vasco.hinostroza@ufl.edu",
     "mail_type": "ALL",
+    "modules": ["R"],
     "conda_env": "/blue/kejun.huang/vasco.hinostroza/nicherunner/conda/envs/ibd_cosmx_k4"
   }
 }

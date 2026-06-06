@@ -92,6 +92,20 @@ Optional Poisson/KL tuning keys:
 - `poisson_max_iter` (default `5000`)
 - `poisson_normalize_rows_to_sum1` (default `false`)
 
+If a stage needs extra environment modules on HPG, add them under `slurm.modules`. Example:
+
+```json
+{
+  "slurm": {
+    "enabled": true,
+    "conda_env": "/blue/.../envs/ibd_cosmx_k4",
+    "modules": ["R"]
+  }
+}
+```
+
+This is useful for `rcausal_mgm` runs that need `Rscript` on `PATH`.
+
 ## Preflight
 
 Use `POST /runs/preflight` with the same config payload to validate required fields and paths.

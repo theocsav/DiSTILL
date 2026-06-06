@@ -60,6 +60,7 @@
     "mem": "500gb",
     "cpus_per_task": 32,
     "qos": "kejun.huang-b",
+    "modules": ["R"],
     "mail_user": "vasco.hinostroza@ufl.edu",
     "mail_type": "ALL",
     "conda_env": "/blue/kejun.huang/vasco.hinostroza/nicherunner/conda/envs/ibd_cosmx_k4"
