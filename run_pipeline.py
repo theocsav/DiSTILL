@@ -14,6 +14,7 @@ DEFAULT_POISSON_TEMPLATE = "pipeline_assets/scripts/IBD_3000epochs_systematicNMF
 DEFAULT_POST_NMF_NOTEBOOK = "pipeline_assets/IBD_Post_NMF_Analysis.ipynb"
 DEFAULT_RCAUSAL_NOTEBOOK = "pipeline_assets/IBD_RCausalMGM_Preparation.ipynb"
 DEFAULT_MLP_SCRIPT = "pipeline_assets/IBD_MLP_44Features.py"
+DEFAULT_FOV_MLP_INPUT_BUILDER = "pipeline_assets/IBD_Build_FOV_MLP_Inputs.py"
 DEFAULT_REPORT_TITLE = "NicheRunner Run Report"
 ALLOWED_STAGES = ("cell2loc_nmf", "post_nmf", "rcausal_mgm", "mlp", "report")
 ALLOWED_MODES = ("fixed_k", "elbow_k", "poisson_redundancy_k", "poisson_cumulative_improvement_k")
@@ -787,16 +788,60 @@ def main():
         script_copy = copy_resource(script_source, run_dir_path)
         args_list = config.get("mlp_args", [])
         extra_args = " ".join(shell_quote(arg) for arg in args_list)
-        stage_commands.append(
-            (
-                "mlp",
-                (
-                    f"NICHERUNNER_OUTPUT_DIR={shell_quote(output_dir)} "
-                    f"NICHERUNNER_MLP_OUTPUT_DIR={shell_quote(str(Path(output_dir) / 'MLP_44Features'))} "
-                    f"python {shell_quote(script_copy)} {extra_args}"
-                ).strip(),
+        mlp_feature_scope = str(config.get("mlp_feature_scope", "patient")).strip().lower()
+        mlp_output_subdir = config.get("mlp_output_subdir")
+        if not mlp_output_subdir:
+            mlp_output_subdir = "MLP_FOVFeatures" if mlp_feature_scope == "fov" else "MLP_44Features"
+        mlp_output_dir = str(Path(output_dir) / mlp_output_subdir)
+        if mlp_feature_scope == "fov":
+            builder_source = resolve_template(root, config.get("mlp_input_builder_script", DEFAULT_FOV_MLP_INPUT_BUILDER))
+            if not builder_source.exists():
+                raise FileNotFoundError(f"FOV MLP input builder script not found: {builder_source}")
+            builder_copy = copy_resource(builder_source, run_dir_path)
+            mlp_input_subdir = config.get("mlp_input_subdir", "MLP_FOVFeatures_inputs")
+            mlp_input_dir = str(Path(output_dir) / mlp_input_subdir)
+            niche_gene_count = int(config.get("mlp_niche_gene_count_per_group", 20))
+            builder_cmd = (
+                f"python {shell_quote(builder_copy)} "
+                f"--output-dir {shell_quote(output_dir)} "
+                f"--cosmx-with-nmf {shell_quote(str(Path(output_dir) / 'cosmx_with_nmf.h5ad'))} "
+                f"--dest-dir {shell_quote(mlp_input_dir)} "
+                f"--niche-gene-count {niche_gene_count}"
             )
-        )
+            mlp_cmd = (
+                f"NICHERUNNER_OUTPUT_DIR={shell_quote(mlp_input_dir)} "
+                f"NICHERUNNER_SOURCE_OUTPUT_DIR={shell_quote(output_dir)} "
+                f"NICHERUNNER_MLP_UNIT={shell_quote('fov')} "
+                f"NICHERUNNER_MLP_OUTPUT_DIR={shell_quote(mlp_output_dir)} "
+                f"python {shell_quote(script_copy)} {extra_args}"
+            ).strip()
+            mlp_stage_script = run_dir_path / "run_mlp_stage.sh"
+            write_text(
+                mlp_stage_script,
+                "\n".join(
+                    [
+                        "#!/usr/bin/env bash",
+                        "set -euo pipefail",
+                        builder_cmd,
+                        mlp_cmd,
+                        "",
+                    ]
+                ),
+            )
+            stage_commands.append(("mlp", f"bash {shell_quote(mlp_stage_script)}"))
+        else:
+            stage_commands.append(
+                (
+                    "mlp",
+                    (
+                        f"NICHERUNNER_OUTPUT_DIR={shell_quote(output_dir)} "
+                        f"NICHERUNNER_SOURCE_OUTPUT_DIR={shell_quote(output_dir)} "
+                        f"NICHERUNNER_MLP_UNIT={shell_quote('patient')} "
+                        f"NICHERUNNER_MLP_OUTPUT_DIR={shell_quote(mlp_output_dir)} "
+                        f"python {shell_quote(script_copy)} {extra_args}"
+                    ).strip(),
+                )
+            )
 
     report_script_path = None
     if "report" in stages:

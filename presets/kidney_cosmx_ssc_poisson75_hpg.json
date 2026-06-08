@@ -42,7 +42,7 @@
     "--r-num-boots",
     "20"
   ],
-  "mlp_script_path": "pipeline_assets/IBD_MLP_44Features.py",
+  "mlp_script_path": "pipeline_assets/IBD_MLP_LeakageSafe.py",
   "report_title": "NicheRunner Kidney HD/SSc Run (Poisson/KL 75% cumulative improvement)",
   "preflight_slurm": {
     "time": "0-00:10:00",

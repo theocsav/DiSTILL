@@ -39,7 +39,10 @@
     "--r-num-boots",
     "20"
   ],
-  "mlp_script_path": "pipeline_assets/IBD_MLP_44Features.py",
+  "mlp_script_path": "pipeline_assets/IBD_MLP_LeakageSafe.py",
+  "mlp_feature_scope": "fov",
+  "mlp_output_subdir": "MLP_FOVFeatures",
+  "mlp_input_subdir": "MLP_FOVFeatures_inputs",
   "report_title": "NicheRunner Skin Visium HC/SSc Run (1mm pseudo-FOV, Poisson/KL NMF)",
   "preflight_slurm": {
     "time": "0-00:10:00",
