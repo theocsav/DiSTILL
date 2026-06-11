@@ -108,20 +108,32 @@ def _fit_inner_model(X_train: pd.DataFrame, y_train: pd.Series, groups_train: pd
     group_values = groups_train.to_numpy()
 
     param_grid = {
-        "hidden_layer_sizes": [(8,), (16,), (16, 8), (24, 12)],
+        "hidden_layer_sizes": [
+            (8,),
+            (16,),
+            (32,),
+            (64,),
+            (16, 8),
+            (32, 16),
+            (64, 32),
+            (32, 16, 8),
+            (40, 20, 10, 5),
+        ],
         "activation": ["relu", "tanh"],
-        "alpha": [1e-4, 1e-3, 1e-2, 1e-1],
-        "batch_size": [2, 4],
+        "alpha": [1e-5, 1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1],
+        "learning_rate_init": [1e-4, 3e-4, 1e-3, 3e-3, 1e-2],
+        "batch_size": [8, 16, 32],
     }
 
     best_score = -np.inf
     best_params = None
     best_model = None
 
-    for hidden_sizes, activation, alpha, batch_size in product(
+    for hidden_sizes, activation, alpha, learning_rate_init, batch_size in product(
         param_grid["hidden_layer_sizes"],
         param_grid["activation"],
         param_grid["alpha"],
+        param_grid["learning_rate_init"],
         param_grid["batch_size"],
     ):
         fold_scores = []
@@ -140,10 +152,13 @@ def _fit_inner_model(X_train: pd.DataFrame, y_train: pd.Series, groups_train: pd
                             hidden_layer_sizes=hidden_sizes,
                             activation=activation,
                             alpha=alpha,
+                            learning_rate_init=learning_rate_init,
                             batch_size=batch_size,
                             solver="adam",
                             learning_rate="adaptive",
                             max_iter=1000,
+                            early_stopping=True,
+                            n_iter_no_change=20,
                             random_state=42,
                         ),
                     ),
@@ -162,7 +177,13 @@ def _fit_inner_model(X_train: pd.DataFrame, y_train: pd.Series, groups_train: pd
                 "mlp__hidden_layer_sizes": hidden_sizes,
                 "mlp__activation": activation,
                 "mlp__alpha": alpha,
+                "mlp__learning_rate_init": learning_rate_init,
                 "mlp__batch_size": batch_size,
+                "mlp__solver": "adam",
+                "mlp__learning_rate": "adaptive",
+                "mlp__max_iter": 1000,
+                "mlp__early_stopping": True,
+                "mlp__n_iter_no_change": 20,
             }
             best_model = Pipeline(
                 [
@@ -173,10 +194,13 @@ def _fit_inner_model(X_train: pd.DataFrame, y_train: pd.Series, groups_train: pd
                             hidden_layer_sizes=hidden_sizes,
                             activation=activation,
                             alpha=alpha,
+                            learning_rate_init=learning_rate_init,
                             batch_size=batch_size,
                             solver="adam",
                             learning_rate="adaptive",
                             max_iter=1000,
+                            early_stopping=True,
+                            n_iter_no_change=20,
                             random_state=42,
                         ),
                     ),
