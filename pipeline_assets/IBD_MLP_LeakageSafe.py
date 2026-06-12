@@ -268,6 +268,7 @@ output_path = output_dir / "mlp_results.txt"
 
 top_enrichment = int(os.environ.get("NICHERUNNER_TOP_ENRICHMENT_FEATURES", "5"))
 top_niche_gene = int(os.environ.get("NICHERUNNER_TOP_NICHE_GENE_FEATURES", "20"))
+skip_shap = os.environ.get("NICHERUNNER_SKIP_SHAP", "0") == "1"
 
 original_stdout = sys.stdout
 sys.stdout = open(output_path, "w", encoding="utf-8")
@@ -277,6 +278,7 @@ try:
     print(f"Evaluation unit: {mlp_unit}")
     print("Outer CV mode: logo_grouped")
     print("Inner CV mode: nested training-only tuning with grouped splits")
+    print(f"Skip SHAP: {skip_shap}")
 
     if mlp_unit == "fov":
         nmf_props, enrichment_frame, niche_gene_frame, y, groups = _prepare_fov_frames(
@@ -309,6 +311,7 @@ try:
         print(f"Train groups: {sorted(train_groups.astype(str).unique().tolist())}")
         print(f"Test groups: {sorted(test_groups.astype(str).unique().tolist())}")
         print(f"Train rows: {len(train_items)} | Test rows: {len(test_items)}")
+        sys.stdout.flush()
 
         y_train = y.loc[train_items]
         y_test = y.loc[test_items]
@@ -385,62 +388,65 @@ try:
         ]
     ).to_csv(output_dir / "selected_features_by_fold.csv", index=False)
 
-    print("\n--- Explanatory Full-Data Model (not part of unbiased evaluation) ---")
-    selected_features_full = _select_features(
-        nmf_props,
-        enrichment_frame,
-        niche_gene_frame,
-        y,
-        top_enrichment=top_enrichment,
-        top_niche_gene=top_niche_gene,
-    )
-    X_explain = X_full[selected_features_full]
-    final_model, final_params = _fit_inner_model(X_explain, y, groups)
-    final_model.fit(X_explain, y)
-    print(f"Final explanatory params: {final_params}")
-
-    class_labels = list(final_model.classes_)
-    positive_class = "systemic_sclerosis" if "systemic_sclerosis" in class_labels else class_labels[-1]
-    positive_idx = class_labels.index(positive_class)
-
-    def predict_proba_fn(data):
-        frame = pd.DataFrame(data, columns=X_explain.columns)
-        return final_model.predict_proba(frame)
-
-    explainer = shap.KernelExplainer(predict_proba_fn, X_explain, feature_names=list(X_explain.columns))
-    shap_values = explainer.shap_values(X_explain, nsamples=min(200, max(50, X_explain.shape[1] * 10)))
-
-    if isinstance(shap_values, list):
-        shap_matrix = np.asarray(shap_values[positive_idx])
+    if skip_shap:
+        print("\n--- SHAP skipped by configuration ---")
     else:
-        shap_array = np.asarray(shap_values)
-        shap_matrix = shap_array[:, :, positive_idx] if shap_array.ndim == 3 else shap_array
+        print("\n--- Explanatory Full-Data Model (not part of unbiased evaluation) ---")
+        selected_features_full = _select_features(
+            nmf_props,
+            enrichment_frame,
+            niche_gene_frame,
+            y,
+            top_enrichment=top_enrichment,
+            top_niche_gene=top_niche_gene,
+        )
+        X_explain = X_full[selected_features_full]
+        final_model, final_params = _fit_inner_model(X_explain, y, groups)
+        final_model.fit(X_explain, y)
+        print(f"Final explanatory params: {final_params}")
 
-    shap_df = pd.DataFrame(shap_matrix, columns=X_explain.columns, index=X_explain.index)
-    shap_df.to_csv(output_dir / "shap_values_positive_class.csv", index=True)
+        class_labels = list(final_model.classes_)
+        positive_class = "systemic_sclerosis" if "systemic_sclerosis" in class_labels else class_labels[-1]
+        positive_idx = class_labels.index(positive_class)
 
-    shap_importance_df = pd.DataFrame(
-        {
-            "feature": X_explain.columns,
-            "mean_abs_shap": np.abs(shap_matrix).mean(axis=0),
-            "mean_shap": shap_matrix.mean(axis=0),
-        }
-    ).sort_values("mean_abs_shap", ascending=False)
-    shap_importance_df.to_csv(output_dir / "shap_importance.csv", index=False)
-    print(f"Positive class used for SHAP: {positive_class}")
-    print(shap_importance_df.head(20).to_string(index=False))
+        def predict_proba_fn(data):
+            frame = pd.DataFrame(data, columns=X_explain.columns)
+            return final_model.predict_proba(frame)
 
-    top_n = min(20, len(shap_importance_df))
-    shap_plot = shap_importance_df.head(top_n).iloc[::-1]
-    plt.figure(figsize=(10, max(6, top_n * 0.35)))
-    colors = ["#1f77b4" if value >= 0 else "#d62728" for value in shap_plot["mean_shap"]]
-    plt.barh(shap_plot["feature"], shap_plot["mean_abs_shap"], color=colors, edgecolor="black", alpha=0.85)
-    plt.xlabel("Mean absolute SHAP value")
-    plt.ylabel("Feature")
-    plt.title(f"SHAP feature importance for {positive_class}")
-    plt.tight_layout()
-    plt.savefig(output_dir / "shap_importance_top20.png", dpi=200, bbox_inches="tight")
-    plt.close()
+        explainer = shap.KernelExplainer(predict_proba_fn, X_explain, feature_names=list(X_explain.columns))
+        shap_values = explainer.shap_values(X_explain, nsamples=min(200, max(50, X_explain.shape[1] * 10)))
+
+        if isinstance(shap_values, list):
+            shap_matrix = np.asarray(shap_values[positive_idx])
+        else:
+            shap_array = np.asarray(shap_values)
+            shap_matrix = shap_array[:, :, positive_idx] if shap_array.ndim == 3 else shap_array
+
+        shap_df = pd.DataFrame(shap_matrix, columns=X_explain.columns, index=X_explain.index)
+        shap_df.to_csv(output_dir / "shap_values_positive_class.csv", index=True)
+
+        shap_importance_df = pd.DataFrame(
+            {
+                "feature": X_explain.columns,
+                "mean_abs_shap": np.abs(shap_matrix).mean(axis=0),
+                "mean_shap": shap_matrix.mean(axis=0),
+            }
+        ).sort_values("mean_abs_shap", ascending=False)
+        shap_importance_df.to_csv(output_dir / "shap_importance.csv", index=False)
+        print(f"Positive class used for SHAP: {positive_class}")
+        print(shap_importance_df.head(20).to_string(index=False))
+
+        top_n = min(20, len(shap_importance_df))
+        shap_plot = shap_importance_df.head(top_n).iloc[::-1]
+        plt.figure(figsize=(10, max(6, top_n * 0.35)))
+        colors = ["#1f77b4" if value >= 0 else "#d62728" for value in shap_plot["mean_shap"]]
+        plt.barh(shap_plot["feature"], shap_plot["mean_abs_shap"], color=colors, edgecolor="black", alpha=0.85)
+        plt.xlabel("Mean absolute SHAP value")
+        plt.ylabel("Feature")
+        plt.title(f"SHAP feature importance for {positive_class}")
+        plt.tight_layout()
+        plt.savefig(output_dir / "shap_importance_top20.png", dpi=200, bbox_inches="tight")
+        plt.close()
 
 finally:
     sys.stdout.close()
