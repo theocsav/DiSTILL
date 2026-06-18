@@ -157,8 +157,6 @@ def _fit_inner_model(X_train: pd.DataFrame, y_train: pd.Series, groups_train: pd
                             solver="adam",
                             learning_rate="adaptive",
                             max_iter=1000,
-                            early_stopping=True,
-                            n_iter_no_change=20,
                             random_state=42,
                         ),
                     ),
@@ -182,8 +180,6 @@ def _fit_inner_model(X_train: pd.DataFrame, y_train: pd.Series, groups_train: pd
                 "mlp__solver": "adam",
                 "mlp__learning_rate": "adaptive",
                 "mlp__max_iter": 1000,
-                "mlp__early_stopping": True,
-                "mlp__n_iter_no_change": 20,
             }
             best_model = Pipeline(
                 [
@@ -199,8 +195,6 @@ def _fit_inner_model(X_train: pd.DataFrame, y_train: pd.Series, groups_train: pd
                             solver="adam",
                             learning_rate="adaptive",
                             max_iter=1000,
-                            early_stopping=True,
-                            n_iter_no_change=20,
                             random_state=42,
                         ),
                     ),
