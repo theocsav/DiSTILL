@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Canonical stage implementation: supported through presets plus run_pipeline.py.
+# This file remains part of the pipeline contract, but it is not the app-level
+# job submission entrypoint by itself.
 import json
 import os
 import sys

@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# Deprecated standalone launcher retained for reference. New runs should use
+# presets plus run_pipeline.py instead of calling this script directly.
 import cell2location as c2l
 import matplotlib
 import matplotlib.pyplot as plt

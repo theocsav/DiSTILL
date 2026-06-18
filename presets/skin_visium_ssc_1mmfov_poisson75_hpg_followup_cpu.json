@@ -1,0 +1,81 @@
+{
+  "id": "skin_visium_ssc_1mmfov_poisson75_hpg_followup_cpu",
+  "label": "Skin Visium HC/SSc 1mm pseudo-FOV (NMF + downstream, HPG CPU)",
+  "organ": "skin",
+  "platform": "visium",
+  "run_name": "skin_visium_ssc_1mmfov_poisson75_split",
+  "mode": "poisson_cumulative_improvement_k",
+  "template_path": "pipeline_assets/scripts/IBD_3000epochs_systematicNMFapproach.py",
+  "reference_h5ad_path": "/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_reference.h5ad",
+  "cosmx_h5ad_path": "/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_visium_ssc_1mmfov_spatial.h5ad",
+  "cell_metadata_path": "/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_visium_ssc_1mmfov_metadata.csv",
+  "k_min": 2,
+  "k_max": 20,
+  "poisson_n_runs": 10,
+  "poisson_max_iter": 5000,
+  "poisson_normalize_rows_to_sum1": false,
+  "poisson_cumulative_improvement_target": 0.75,
+  "stages": ["nmf", "post_nmf", "rcausal_mgm", "mlp", "report"],
+  "post_nmf_mode": "papermill",
+  "post_nmf_notebook_path": "pipeline_assets/IBD_Post_NMF_Analysis.ipynb",
+  "rcausal_mode": "python",
+  "rcausal_script_path": "pipeline_assets/IBD_RCausalMGM_Preparation.py",
+  "rcausal_support_files": [
+    "pipeline_assets/rCausalMGM_Rscript_NeighborhoodInteractions.R",
+    "pipeline_assets/rCausalMGM_Rscript_NicheComposition.R",
+    "pipeline_assets/rCausalMGM_Rscript_NicheGeneFeatures.R"
+  ],
+  "rcausal_args": [
+    "--output-dir",
+    "/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/skin_visium_ssc_1mmfov_poisson75_split/outputs/rcausal_mgm",
+    "--niche-h5ad",
+    "/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/skin_visium_ssc_1mmfov_poisson75_split/outputs/cosmx_with_nmf.h5ad",
+    "--neighborhood-h5ad",
+    "/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/skin_visium_ssc_1mmfov_poisson75_split/outputs/cosmx_with_nmf.h5ad",
+    "--run-r-scripts",
+    "--r-script-dir",
+    ".",
+    "--rscript-bin",
+    "Rscript",
+    "--r-num-boots",
+    "20"
+  ],
+  "mlp_script_path": "pipeline_assets/IBD_MLP_LeakageSafe.py",
+  "mlp_feature_scope": "fov",
+  "mlp_output_subdir": "MLP_FOVFeatures",
+  "mlp_input_subdir": "MLP_FOVFeatures_inputs",
+  "report_title": "NicheRunner Skin Visium HC/SSc Run (NMF + downstream CPU follow-up)",
+  "preflight_slurm": {
+    "time": "0-00:10:00",
+    "mem": "8gb",
+    "cpus_per_task": 2
+  },
+  "default_resources": {
+    "time": "96:00:00",
+    "cpus_per_task": 4,
+    "mem": "160gb",
+    "qos": "kejun.huang-b"
+  },
+  "default_params": {
+    "mode": "poisson_cumulative_improvement_k",
+    "k_min": 2,
+    "k_max": 20,
+    "poisson_n_runs": 10,
+    "poisson_max_iter": 5000,
+    "poisson_normalize_rows_to_sum1": false,
+    "poisson_cumulative_improvement_target": 0.75
+  },
+  "slurm": {
+    "enabled": true,
+    "job_name": "skin_v1_p75_cpu",
+    "account": "kejun.huang",
+    "time": "96:00:00",
+    "mem": "160gb",
+    "cpus_per_task": 4,
+    "qos": "kejun.huang-b",
+    "mail_user": "vasco.hinostroza@ufl.edu",
+    "mail_type": "ALL",
+    "modules": ["R"],
+    "conda_env": "/blue/kejun.huang/vasco.hinostroza/nicherunner/conda/envs/ibd_cosmx_k4"
+  }
+}

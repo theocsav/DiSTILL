@@ -80,6 +80,24 @@ Use `stages` in the run config to run multiple pipeline steps in one SLURM job:
 }
 ```
 
+The canonical API path is still preset/config -> `run_pipeline.py` -> generated
+run directory. Direct execution of historical scripts under `pipeline_assets/`
+is not the recommended app contract.
+
+The runner now supports both the original monolithic stage and a split stage model:
+
+- `cell2loc_nmf`
+- `cell2loc`
+- `nmf`
+- `post_nmf`
+- `rcausal_mgm`
+- `mlp`
+- `report`
+
+Use `cell2loc_nmf` for the original combined flow. Use `cell2loc` followed by
+`nmf` plus downstream CPU stages when you want a GPU `cell2location` job and a
+separate CPU follow-up job.
+
 NMF rank-selection modes:
 
 - `fixed_k`: use `n_components` or `k`

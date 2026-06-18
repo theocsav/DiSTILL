@@ -11,12 +11,13 @@ from pathlib import Path
 DEFAULT_FIXED_TEMPLATE = "pipeline_assets/scripts/IBD_3000epochs_500samples_NMF-k4.py"
 DEFAULT_ELBOW_TEMPLATE = "pipeline_assets/scripts/IBD_3000epochs_systematicNMFapproach.py"
 DEFAULT_POISSON_TEMPLATE = "pipeline_assets/scripts/IBD_3000epochs_systematicNMFapproach.py"
+DEFAULT_NMF_ONLY_SCRIPT = "pipeline_assets/scripts/IBD_Run_NMF_From_Cell2Loc.py"
 DEFAULT_POST_NMF_NOTEBOOK = "pipeline_assets/IBD_Post_NMF_Analysis.ipynb"
 DEFAULT_RCAUSAL_NOTEBOOK = "pipeline_assets/IBD_RCausalMGM_Preparation.ipynb"
 DEFAULT_MLP_SCRIPT = "pipeline_assets/IBD_MLP_44Features.py"
 DEFAULT_FOV_MLP_INPUT_BUILDER = "pipeline_assets/IBD_Build_FOV_MLP_Inputs.py"
 DEFAULT_REPORT_TITLE = "NicheRunner Run Report"
-ALLOWED_STAGES = ("cell2loc_nmf", "post_nmf", "rcausal_mgm", "mlp", "report")
+ALLOWED_STAGES = ("cell2loc_nmf", "cell2loc", "nmf", "post_nmf", "rcausal_mgm", "mlp", "report")
 ALLOWED_MODES = ("fixed_k", "elbow_k", "poisson_redundancy_k", "poisson_cumulative_improvement_k")
 
 
@@ -68,6 +69,14 @@ def render_value(value):
     return str(value)
 
 
+def render_python_literal(value):
+    if isinstance(value, str):
+        return json.dumps(value)
+    if value is None:
+        return "None"
+    return repr(value)
+
+
 def write_text(path, content):
     path.write_text(content, encoding="utf-8")
 
@@ -107,42 +116,57 @@ def validate_cli_config(config, root, check_paths=True):
     errors = []
     warnings = []
 
-    for key in ("reference_h5ad_path", "cosmx_h5ad_path", "cell_metadata_path"):
-        value = config.get(key)
-        if not value:
-            errors.append(f"Missing required config key: {key}")
-            continue
-        if check_paths and not Path(value).exists():
-            errors.append(f"Path does not exist: {key} -> {value}")
-
-    mode = config.get("mode", "fixed_k")
-    if mode not in ALLOWED_MODES:
-        errors.append("mode must be one of: 'fixed_k', 'elbow_k', 'poisson_redundancy_k', 'poisson_cumulative_improvement_k'.")
-    elif mode == "fixed_k":
-        if config.get("n_components") is None and config.get("k") is None:
-            errors.append("Fixed-k mode requires 'n_components' or 'k'.")
-    else:
-        k_min = int(config.get("k_min", 2))
-        k_max = int(config.get("k_max", 20))
-        if k_max < k_min:
-            errors.append("k_max must be >= k_min.")
-        if mode == "poisson_cumulative_improvement_k":
-            target = float(config.get("poisson_cumulative_improvement_target", 0.95))
-            if target <= 0 or target > 1:
-                errors.append("poisson_cumulative_improvement_target must be in the interval (0, 1].")
-
     try:
         stages = normalize_stages(config)
     except ValueError as exc:
         errors.append(str(exc))
         stages = []
 
+    needs_cell2loc_inputs = "cell2loc_nmf" in stages or "cell2loc" in stages
+    needs_nmf_config = "cell2loc_nmf" in stages or "nmf" in stages
+
+    if needs_cell2loc_inputs:
+        for key in ("reference_h5ad_path", "cosmx_h5ad_path", "cell_metadata_path"):
+            value = config.get(key)
+            if not value:
+                errors.append(f"Missing required config key: {key}")
+                continue
+            if check_paths and not Path(value).exists():
+                errors.append(f"Path does not exist: {key} -> {value}")
+    elif "nmf" in stages:
+        value = config.get("cosmx_h5ad_path")
+        if not value:
+            warnings.append("cosmx_h5ad_path is not required for nmf-only stage generation.")
+
+    mode = config.get("mode", "fixed_k")
+    if needs_nmf_config:
+        if mode not in ALLOWED_MODES:
+            errors.append("mode must be one of: 'fixed_k', 'elbow_k', 'poisson_redundancy_k', 'poisson_cumulative_improvement_k'.")
+        elif mode == "fixed_k":
+            if config.get("n_components") is None and config.get("k") is None:
+                errors.append("Fixed-k mode requires 'n_components' or 'k'.")
+        else:
+            k_min = int(config.get("k_min", 2))
+            k_max = int(config.get("k_max", 20))
+            if k_max < k_min:
+                errors.append("k_max must be >= k_min.")
+            if mode == "poisson_cumulative_improvement_k":
+                target = float(config.get("poisson_cumulative_improvement_target", 0.95))
+                if target <= 0 or target > 1:
+                    errors.append("poisson_cumulative_improvement_target must be in the interval (0, 1].")
+
     template_path = config.get("template_path")
-    if not template_path:
+    if needs_cell2loc_inputs and not template_path:
         template_path = default_template_for_mode(mode)
-    template_path = resolve_template(root, template_path)
-    if check_paths and not template_path.exists():
-        errors.append(f"Template not found: {template_path}")
+    if needs_cell2loc_inputs:
+        template_path = resolve_template(root, template_path)
+        if check_paths and not template_path.exists():
+            errors.append(f"Template not found: {template_path}")
+
+    if "nmf" in stages:
+        nmf_script_path = resolve_template(root, config.get("nmf_script_path", DEFAULT_NMF_ONLY_SCRIPT))
+        if check_paths and not nmf_script_path.exists():
+            errors.append(f"NMF-only script not found: {nmf_script_path}")
 
     if "post_nmf" in stages:
         post_nmf_mode = config.get("post_nmf_mode", "papermill")
@@ -500,6 +524,10 @@ def build_sbatch(run_dir, run_command, slurm, output_dir, run_name):
     account = slurm.get("account")
     partition = slurm.get("partition")
     qos = slurm.get("qos")
+    gres = slurm.get("gres")
+    gpus = slurm.get("gpus")
+    gpus_per_node = slurm.get("gpus_per_node")
+    constraint = slurm.get("constraint")
     mail_user = slurm.get("mail_user")
     mail_type = slurm.get("mail_type")
     conda_env = slurm.get("conda_env")
@@ -528,6 +556,14 @@ def build_sbatch(run_dir, run_command, slurm, output_dir, run_name):
         lines.append(f"#SBATCH --partition={partition}")
     if qos:
         lines.append(f"#SBATCH --qos={qos}")
+    if gres:
+        lines.append(f"#SBATCH --gres={gres}")
+    if gpus is not None:
+        lines.append(f"#SBATCH --gpus={gpus}")
+    if gpus_per_node is not None:
+        lines.append(f"#SBATCH --gpus-per-node={gpus_per_node}")
+    if constraint:
+        lines.append(f"#SBATCH --constraint={constraint}")
     if mail_user:
         lines.append(f"#SBATCH --mail-user={mail_user}")
     if mail_type:
@@ -539,6 +575,7 @@ def build_sbatch(run_dir, run_command, slurm, output_dir, run_name):
         "umask 007",
         "export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}",
         "export MKL_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}",
+        "export OPENBLAS_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}",
         "export NUMEXPR_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}",
         "",
     ]
@@ -627,7 +664,7 @@ def main():
         raise ValueError("mode must be one of: 'fixed_k', 'elbow_k', 'poisson_redundancy_k', 'poisson_cumulative_improvement_k'.")
 
     stages = normalize_stages(config)
-    if "cell2loc_nmf" in stages:
+    if "cell2loc_nmf" in stages or "cell2loc" in stages:
         ensure_required(config, "reference_h5ad_path")
         ensure_required(config, "cosmx_h5ad_path")
         ensure_required(config, "cell_metadata_path")
@@ -635,12 +672,14 @@ def main():
         ensure_required(config, "cosmx_h5ad_path")
 
     template_path = config.get("template_path")
-    if not template_path:
-        template_path = default_template_for_mode(mode)
-    template_path = resolve_template(root, template_path)
-
-    if not template_path.exists():
-        raise FileNotFoundError(f"Template not found: {template_path}")
+    if "cell2loc_nmf" in stages or "cell2loc" in stages:
+        if not template_path:
+            template_path = default_template_for_mode(mode)
+        template_path = resolve_template(root, template_path)
+        if not template_path.exists():
+            raise FileNotFoundError(f"Template not found: {template_path}")
+    else:
+        template_path = resolve_template(root, config.get("template_path", default_template_for_mode(mode)))
 
     run_dir = config.get("run_dir") or str(root / "runs" / run_name)
     run_dir_path = Path(run_dir)
@@ -653,68 +692,155 @@ def main():
     ref_model_name = config.get("ref_model_name") or f"cell2location_reference_model_{run_name}"
     inf_aver_name = config.get("inf_aver_name") or f"inf_aver_{run_name}.csv"
 
-    text = template_path.read_text(encoding="utf-8")
     warnings = []
 
-    text = apply_assignment(text, "reference_h5ad_path", render_value(config["reference_h5ad_path"]), warnings)
-    text = apply_assignment(text, "cosmx_h5ad_path", render_value(config["cosmx_h5ad_path"]), warnings)
-    text = apply_assignment(text, "ref_model_dir", render_value(ref_model_dir), warnings)
-    text = apply_assignment(text, "ref_model_path", f"os.path.join(ref_model_dir, {json.dumps(ref_model_name)})", warnings)
-    text = apply_assignment(text, "inf_aver_csv_path", f"os.path.join(ref_model_dir, {json.dumps(inf_aver_name)})", warnings)
+    patched_script_path = run_dir_path / f"{run_name}_pipeline.py"
+    if "cell2loc_nmf" in stages or "cell2loc" in stages:
+        text = template_path.read_text(encoding="utf-8")
 
-    text = apply_assignment(text, "output_dir", render_value(output_dir), warnings)
-    text = apply_assignment(text, "nmf_output_dir", render_value(output_dir), warnings)
+        text = apply_assignment(text, "reference_h5ad_path", render_value(config["reference_h5ad_path"]), warnings)
+        text = apply_assignment(text, "cosmx_h5ad_path", render_value(config["cosmx_h5ad_path"]), warnings)
+        text = apply_assignment(text, "ref_model_dir", render_value(ref_model_dir), warnings)
+        text = apply_assignment(text, "ref_model_path", f"os.path.join(ref_model_dir, {json.dumps(ref_model_name)})", warnings)
+        text = apply_assignment(text, "inf_aver_csv_path", f"os.path.join(ref_model_dir, {json.dumps(inf_aver_name)})", warnings)
 
-    cell_metadata_path = norm_path(config["cell_metadata_path"])
-    cell_metadata_file = os.path.basename(cell_metadata_path)
-    text = apply_assignment(text, "cell_metadata_file_name", json.dumps(cell_metadata_file), warnings)
-    text = apply_assignment(text, "spatial_metadata_path", render_value(cell_metadata_path), warnings)
+        text = apply_assignment(text, "output_dir", render_value(output_dir), warnings)
+        text = apply_assignment(text, "nmf_output_dir", render_value(output_dir), warnings)
+        text = apply_assignment(
+            text,
+            "c2l_train_accelerator",
+            render_python_literal(config.get("cell2loc_train_accelerator", "cpu")),
+            warnings,
+        )
+        text = apply_assignment(
+            text,
+            "c2l_train_devices",
+            render_python_literal(config.get("cell2loc_train_devices", "auto")),
+            warnings,
+        )
+        text = apply_assignment(
+            text,
+            "c2l_export_accelerator",
+            render_python_literal(config.get("cell2loc_export_accelerator", config.get("cell2loc_train_accelerator", "cpu"))),
+            warnings,
+        )
 
-    if mode == "fixed_k":
-        n_components = config.get("n_components") or config.get("k")
-        if n_components is None:
-            raise ValueError("Fixed-k mode requires 'n_components' or 'k'.")
-        text = apply_assignment(text, "n_components", str(int(n_components)), warnings)
-    else:
-        k_min = int(config.get("k_min", 2))
-        k_max = int(config.get("k_max", 20))
-        if k_max < k_min:
-            raise ValueError("k_max must be >= k_min.")
-        text = apply_assignment(text, "K_range", f"range({k_min}, {k_max + 1})", warnings)
-        if mode == "poisson_redundancy_k":
-            selection_method = "poisson_redundancy_k"
-        elif mode == "poisson_cumulative_improvement_k":
-            selection_method = "poisson_cumulative_improvement_k"
+        cell_metadata_path = norm_path(config["cell_metadata_path"])
+        cell_metadata_file = os.path.basename(cell_metadata_path)
+        text = apply_assignment(text, "cell_metadata_file_name", json.dumps(cell_metadata_file), warnings)
+        text = apply_assignment(text, "spatial_metadata_path", render_value(cell_metadata_path), warnings)
+
+        if mode == "fixed_k":
+            n_components = config.get("n_components") or config.get("k")
+            if n_components is None:
+                raise ValueError("Fixed-k mode requires 'n_components' or 'k'.")
+            text = apply_assignment(text, "n_components", str(int(n_components)), warnings)
         else:
-            selection_method = "elbow_k"
-        text = apply_assignment(text, "nmf_selection_method", render_value(selection_method), warnings)
-        if mode in ("poisson_redundancy_k", "poisson_cumulative_improvement_k"):
-            if config.get("poisson_n_runs") is not None:
-                text = apply_assignment(text, "poisson_n_runs", str(int(config["poisson_n_runs"])), warnings)
-            if config.get("poisson_max_iter") is not None:
-                text = apply_assignment(text, "poisson_max_iter", str(int(config["poisson_max_iter"])), warnings)
-            if config.get("poisson_normalize_rows_to_sum1") is not None:
+            k_min = int(config.get("k_min", 2))
+            k_max = int(config.get("k_max", 20))
+            if k_max < k_min:
+                raise ValueError("k_max must be >= k_min.")
+            text = apply_assignment(text, "K_range", f"range({k_min}, {k_max + 1})", warnings)
+            if mode == "poisson_redundancy_k":
+                selection_method = "poisson_redundancy_k"
+            elif mode == "poisson_cumulative_improvement_k":
+                selection_method = "poisson_cumulative_improvement_k"
+            else:
+                selection_method = "elbow_k"
+            text = apply_assignment(text, "nmf_selection_method", render_value(selection_method), warnings)
+            if mode in ("poisson_redundancy_k", "poisson_cumulative_improvement_k"):
+                if config.get("poisson_n_runs") is not None:
+                    text = apply_assignment(text, "poisson_n_runs", str(int(config["poisson_n_runs"])), warnings)
+                if config.get("poisson_max_iter") is not None:
+                    text = apply_assignment(text, "poisson_max_iter", str(int(config["poisson_max_iter"])), warnings)
+                if config.get("poisson_normalize_rows_to_sum1") is not None:
+                    text = apply_assignment(
+                        text,
+                        "poisson_normalize_rows_to_sum1",
+                        str(bool(config["poisson_normalize_rows_to_sum1"])),
+                        warnings,
+                    )
+            if mode == "poisson_cumulative_improvement_k" and config.get("poisson_cumulative_improvement_target") is not None:
                 text = apply_assignment(
                     text,
-                    "poisson_normalize_rows_to_sum1",
-                    str(bool(config["poisson_normalize_rows_to_sum1"])),
+                    "poisson_cumulative_improvement_target",
+                    str(float(config["poisson_cumulative_improvement_target"])),
                     warnings,
                 )
-        if mode == "poisson_cumulative_improvement_k" and config.get("poisson_cumulative_improvement_target") is not None:
-            text = apply_assignment(
-                text,
-                "poisson_cumulative_improvement_target",
-                str(float(config["poisson_cumulative_improvement_target"])),
-                warnings,
-            )
 
-    patched_script_path = run_dir_path / f"{run_name}_pipeline.py"
-    write_text(patched_script_path, text)
+        write_text(patched_script_path, text)
 
     stage_commands = []
 
     if "cell2loc_nmf" in stages:
         stage_commands.append(("cell2loc_nmf", f"python {shell_quote(patched_script_path)}"))
+    else:
+        if "cell2loc" in stages:
+            stage_commands.append(
+                (
+                    "cell2loc",
+                    (
+                        f"NICHERUNNER_PIPELINE_STAGE={shell_quote('cell2loc')} "
+                        f"python {shell_quote(patched_script_path)}"
+                    ).strip(),
+                )
+            )
+        if "nmf" in stages:
+            nmf_script_source = resolve_template(root, config.get("nmf_script_path", DEFAULT_NMF_ONLY_SCRIPT))
+            if not nmf_script_source.exists():
+                raise FileNotFoundError(f"NMF-only script not found: {nmf_script_source}")
+            nmf_text = nmf_script_source.read_text(encoding="utf-8")
+            nmf_text = apply_assignment(
+                nmf_text,
+                "input_h5ad_path",
+                render_value(str(Path(output_dir) / "cosmx_cell2loc_only.h5ad")),
+                warnings,
+            )
+            nmf_text = apply_assignment(nmf_text, "nmf_output_dir", render_value(output_dir), warnings)
+            nmf_text = apply_assignment(
+                nmf_text,
+                "nmf_h5ad_path",
+                render_value(str(Path(output_dir) / "cosmx_with_nmf.h5ad")),
+                warnings,
+            )
+            if mode == "fixed_k":
+                n_components = config.get("n_components") or config.get("k")
+                if n_components is None:
+                    raise ValueError("Fixed-k mode requires 'n_components' or 'k'.")
+                nmf_text = apply_assignment(nmf_text, "K_range", f"range({int(n_components)}, {int(n_components) + 1})", warnings)
+                nmf_text = apply_assignment(nmf_text, "nmf_selection_method", render_value("fixed_k"), warnings)
+            else:
+                k_min = int(config.get("k_min", 2))
+                k_max = int(config.get("k_max", 20))
+                nmf_text = apply_assignment(nmf_text, "K_range", f"range({k_min}, {k_max + 1})", warnings)
+                if mode == "poisson_redundancy_k":
+                    selection_method = "poisson_redundancy_k"
+                elif mode == "poisson_cumulative_improvement_k":
+                    selection_method = "poisson_cumulative_improvement_k"
+                else:
+                    selection_method = "elbow_k"
+                nmf_text = apply_assignment(nmf_text, "nmf_selection_method", render_value(selection_method), warnings)
+            if config.get("poisson_n_runs") is not None:
+                nmf_text = apply_assignment(nmf_text, "poisson_n_runs", str(int(config["poisson_n_runs"])), warnings)
+            if config.get("poisson_max_iter") is not None:
+                nmf_text = apply_assignment(nmf_text, "poisson_max_iter", str(int(config["poisson_max_iter"])), warnings)
+            if config.get("poisson_normalize_rows_to_sum1") is not None:
+                nmf_text = apply_assignment(
+                    nmf_text,
+                    "poisson_normalize_rows_to_sum1",
+                    str(bool(config["poisson_normalize_rows_to_sum1"])),
+                    warnings,
+                )
+            if config.get("poisson_cumulative_improvement_target") is not None:
+                nmf_text = apply_assignment(
+                    nmf_text,
+                    "poisson_cumulative_improvement_target",
+                    str(float(config["poisson_cumulative_improvement_target"])),
+                    warnings,
+                )
+            nmf_script_copy = run_dir_path / "run_nmf_from_cell2loc.py"
+            write_text(nmf_script_copy, nmf_text)
+            stage_commands.append(("nmf", f"python {shell_quote(nmf_script_copy)}"))
 
     if "post_nmf" in stages:
         post_nmf_mode = config.get("post_nmf_mode", "papermill")

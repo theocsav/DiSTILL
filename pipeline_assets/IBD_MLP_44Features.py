@@ -1,4 +1,7 @@
 # -*- coding: utf-8 -*-
+# Canonical stage implementation: supported through presets plus run_pipeline.py.
+# This file remains part of the pipeline contract, but it is not the app-level
+# job submission entrypoint by itself.
 import cell2location as c2l
 import matplotlib
 import matplotlib.pyplot as plt

@@ -1,4 +1,6 @@
 #!/bin/bash
+# Deprecated standalone launcher retained for reference. New runs should use
+# presets plus run_pipeline.py instead of calling this script directly.
 #SBATCH --job-name=cell2location_IBD_3000_NMF-k7_500samples
 #SBATCH --output=/blue/kejun.huang/tan.m/IBDCosMx_scRNAseq/Outputs_3000epochs_500samples_NMF-k7/cell2location_IBD_3000epochs_500samples_NMF-k7.out
 #SBATCH --error=/blue/kejun.huang/tan.m/IBDCosMx_scRNAseq/Outputs_3000epochs_500samples_NMF-k7/cell2location_IBD_3000epochs_500samples_NMF-k7.err

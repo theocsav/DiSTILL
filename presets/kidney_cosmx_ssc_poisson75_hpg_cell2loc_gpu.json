@@ -1,0 +1,60 @@
+{
+  "id": "kidney_cosmx_ssc_poisson75_hpg_cell2loc_gpu",
+  "label": "Kidney CosMx HD/SSc (cell2location only, HPG GPU)",
+  "organ": "kidney",
+  "platform": "cosmx",
+  "run_name": "kidney_cosmx_ssc_poisson75_split",
+  "mode": "poisson_cumulative_improvement_k",
+  "template_path": "pipeline_assets/scripts/IBD_3000epochs_systematicNMFapproach.py",
+  "reference_h5ad_path": "/blue/kejun.huang/vasco.hinostroza/data/kidney_dataset/processed/gse183277_kidney_reference.h5ad",
+  "cosmx_h5ad_path": "/blue/kejun.huang/vasco.hinostroza/data/kidney_dataset/processed/kidney_cosmx_six_sample_spatial.h5ad",
+  "cell_metadata_path": "/blue/kejun.huang/vasco.hinostroza/data/kidney_dataset/processed/kidney_cosmx_six_sample_cell_metadata.csv",
+  "ref_model_name": "cell2location_reference_model_kidney_poisson75_split",
+  "inf_aver_name": "inf_aver_kidney_poisson75_split.csv",
+  "cell2loc_train_accelerator": "gpu",
+  "cell2loc_train_devices": 1,
+  "cell2loc_export_accelerator": "gpu",
+  "k_min": 2,
+  "k_max": 20,
+  "poisson_n_runs": 10,
+  "poisson_max_iter": 5000,
+  "poisson_normalize_rows_to_sum1": false,
+  "poisson_cumulative_improvement_target": 0.75,
+  "stages": ["cell2loc"],
+  "report_title": "NicheRunner Kidney HD/SSc Run (cell2location only, GPU)",
+  "preflight_slurm": {
+    "time": "0-00:10:00",
+    "mem": "8gb",
+    "cpus_per_task": 2
+  },
+  "default_resources": {
+    "time": "96:00:00",
+    "cpus_per_task": 16,
+    "mem": "500gb",
+    "qos": "kejun.huang-b",
+    "gres": "gpu:1"
+  },
+  "default_params": {
+    "mode": "poisson_cumulative_improvement_k",
+    "k_min": 2,
+    "k_max": 20,
+    "poisson_n_runs": 10,
+    "poisson_max_iter": 5000,
+    "poisson_normalize_rows_to_sum1": false,
+    "poisson_cumulative_improvement_target": 0.75
+  },
+  "slurm": {
+    "enabled": true,
+    "job_name": "kidney_p75_c2l_gpu",
+    "account": "kejun.huang",
+    "time": "96:00:00",
+    "mem": "500gb",
+    "cpus_per_task": 16,
+    "qos": "kejun.huang-b",
+    "gres": "gpu:1",
+    "mail_user": "vasco.hinostroza@ufl.edu",
+    "mail_type": "ALL",
+    "modules": ["R"],
+    "conda_env": "/blue/kejun.huang/tan.m/cell2location_cuda118_torch22"
+  }
+}

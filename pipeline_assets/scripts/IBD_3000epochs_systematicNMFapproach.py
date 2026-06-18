@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# Canonical stage template: this file is intended to be patched and launched by
+# run_pipeline.py, not used as the primary Distill app entrypoint by itself.
 import cell2location as c2l
 import matplotlib
 import matplotlib.pyplot as plt
@@ -27,6 +29,7 @@ from statsmodels.stats.multitest import multipletests
 from tqdm import tqdm
 import scipy.sparse
 import re
+import sys
 
 def choose_reference_obs_key(obs: pd.DataFrame, candidates: list[str], purpose: str) -> str:
     for key in candidates:
@@ -43,6 +46,10 @@ cosmx_h5ad_path = "/blue/kejun.huang/tan.m/IBDCosMx_scRNAseq/CosMx/GSE234713_Cos
 ref_model_dir = "/blue/kejun.huang/tan.m/IBDCosMx_scRNAseq/cell2location_models"
 os.makedirs(ref_model_dir, exist_ok=True) # Ensure the directory exists
 ref_model_path = os.path.join(ref_model_dir, "cell2location_reference_model_3000ep_systematicNMF_500samp")
+c2l_train_accelerator = "cpu"
+c2l_train_devices = "auto"
+c2l_export_accelerator = "cpu"
+pipeline_stage = os.environ.get("NICHERUNNER_PIPELINE_STAGE", "cell2loc_nmf")
 
 
 ####################################################################################################
@@ -220,7 +227,8 @@ model_ref_trained.train(
     batch_size=2500,
     train_size=1,
     lr=0.002,
-    accelerator='cpu',
+    accelerator=c2l_train_accelerator,
+    devices=c2l_train_devices,
 )
 print("\nReference Model training complete.")
 model_ref_trained.save(ref_model_path, overwrite=True)
@@ -447,7 +455,13 @@ model.view_anndata_setup()
 #####################################################################################################################
 #####################################################################################################################
 
-model.train(max_epochs=3000, batch_size=None, train_size=1, accelerator='cpu')
+model.train(
+    max_epochs=3000,
+    batch_size=None,
+    train_size=1,
+    accelerator=c2l_train_accelerator,
+    devices=c2l_train_devices,
+)
 
 # plot training history
 model.plot_history()
@@ -470,7 +484,7 @@ adata_st = model.export_posterior(
     sample_kwargs={
         "num_samples": 500,
         "batch_size": math.ceil(model.adata.n_obs / 50),
-        "accelerator": "cpu",
+        "accelerator": c2l_export_accelerator,
     },
 )
 
@@ -517,6 +531,23 @@ except KeyError as e:
 except Exception as e:
     print(f"An unexpected error occurred while saving cell abundances: {e}")
 # --- End of code to save inferred cell type abundances ---
+
+cell2loc_only_h5ad_path = os.path.join(output_dir, "cosmx_cell2loc_only.h5ad")
+for obsm_key in list(adata_st.obsm.keys()):
+    obsm_value = adata_st.obsm[obsm_key]
+    if isinstance(obsm_value, pd.DataFrame):
+        sanitized_columns = pd.Index(obsm_value.columns.astype(str)).str.replace("/", "_", regex=False)
+        if not sanitized_columns.equals(obsm_value.columns):
+            obsm_value = obsm_value.copy()
+            obsm_value.columns = sanitized_columns
+            adata_st.obsm[obsm_key] = obsm_value
+
+adata_st.write(cell2loc_only_h5ad_path)
+print(f"Cell2location-only h5ad saved to: {cell2loc_only_h5ad_path}")
+
+if pipeline_stage == "cell2loc":
+    print("\n--- Cell2location stage complete; skipping NMF by request ---")
+    raise SystemExit(0)
 
 
 #####################################################################################################################
@@ -864,15 +895,6 @@ if "cell_type" in adata_st.obs.columns:
         print("WARNING: Crosstab resulted in an empty DataFrame.")
 else:
     print("NMF niche-celltype proportions table could not be generated as 'cell_type' column is missing.")
-
-for obsm_key in list(adata_st.obsm.keys()):
-    obsm_value = adata_st.obsm[obsm_key]
-    if isinstance(obsm_value, pd.DataFrame):
-        sanitized_columns = pd.Index(obsm_value.columns.astype(str)).str.replace("/", "_", regex=False)
-        if not sanitized_columns.equals(obsm_value.columns):
-            obsm_value = obsm_value.copy()
-            obsm_value.columns = sanitized_columns
-            adata_st.obsm[obsm_key] = obsm_value
 
 adata_st.write(nmf_h5ad_path)
 print(f"NMF annotated h5ad saved to: {nmf_h5ad_path}")

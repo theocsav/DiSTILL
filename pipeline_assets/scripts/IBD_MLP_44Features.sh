@@ -1,4 +1,6 @@
 #!/bin/bash
+# Deprecated standalone launcher retained for reference. New runs should use
+# presets plus run_pipeline.py instead of calling this script directly.
 #SBATCH --job-name=IBD_MLP_44Features
 #SBATCH --output=/blue/kejun.huang/tan.m/IBDCosMx_scRNAseq/CosMx/Post-NMF_Analysis/MLP_44Features/IBD_MLP.out
 #SBATCH --error=/blue/kejun.huang/tan.m/IBDCosMx_scRNAseq/CosMx/Post-NMF_Analysis/MLP_44Features/IBD_MLP.err
