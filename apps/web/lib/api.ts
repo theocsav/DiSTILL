@@ -84,6 +84,10 @@ export type Preset = {
     n_components?: number;
     k_min?: number;
     k_max?: number;
+    poisson_n_runs?: number;
+    poisson_max_iter?: number;
+    poisson_normalize_rows_to_sum1?: boolean;
+    poisson_cumulative_improvement_target?: number;
   };
   slurm?: {
     enabled?: boolean;
@@ -94,6 +98,11 @@ export type Preset = {
     account?: string;
     partition?: string;
     qos?: string;
+    gres?: string;
+    gpus?: number;
+    gpus_per_node?: number;
+    constraint?: string;
+    modules?: string[];
     mail_user?: string;
     mail_type?: string;
     conda_env?: string;
