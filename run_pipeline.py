@@ -767,6 +767,20 @@ def main():
                     str(float(config["poisson_cumulative_improvement_target"])),
                     warnings,
                 )
+            if config.get("nmf_backend") is not None:
+                text = apply_assignment(
+                    text,
+                    "nmf_backend",
+                    render_python_literal(config.get("nmf_backend")),
+                    warnings,
+                )
+            if config.get("nmf_device") is not None:
+                text = apply_assignment(
+                    text,
+                    "nmf_device",
+                    render_python_literal(config.get("nmf_device")),
+                    warnings,
+                )
 
         write_text(patched_script_path, text)
 
@@ -836,6 +850,20 @@ def main():
                     nmf_text,
                     "poisson_cumulative_improvement_target",
                     str(float(config["poisson_cumulative_improvement_target"])),
+                    warnings,
+                )
+            if config.get("nmf_backend") is not None:
+                nmf_text = apply_assignment(
+                    nmf_text,
+                    "nmf_backend",
+                    render_python_literal(config.get("nmf_backend")),
+                    warnings,
+                )
+            if config.get("nmf_device") is not None:
+                nmf_text = apply_assignment(
+                    nmf_text,
+                    "nmf_device",
+                    render_python_literal(config.get("nmf_device")),
                     warnings,
                 )
             nmf_script_copy = run_dir_path / "run_nmf_from_cell2loc.py"

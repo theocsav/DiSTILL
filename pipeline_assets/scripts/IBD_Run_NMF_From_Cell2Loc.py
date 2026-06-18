@@ -13,6 +13,14 @@ from sklearn.decomposition import NMF
 from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 
+try:
+    import torch
+
+    TORCH_AVAILABLE = True
+except ImportError:
+    torch = None
+    TORCH_AVAILABLE = False
+
 input_h5ad_path = "/blue/kejun.huang/tan.m/IBDCosMx_scRNAseq/Outputs/cosmx_cell2loc_only.h5ad"
 nmf_output_dir = "/blue/kejun.huang/tan.m/IBDCosMx_scRNAseq/Outputs"
 os.makedirs(nmf_output_dir, exist_ok=True)
@@ -25,9 +33,114 @@ poisson_max_iter = 5000
 poisson_normalize_rows_to_sum1 = False
 poisson_cumulative_improvement_target = 0.95
 poisson_eps = 1e-8
+nmf_backend = "sklearn"
+nmf_device = "auto"
+
+
+class NMFResult:
+    def __init__(self, reconstruction_err_):
+        self.reconstruction_err_ = float(reconstruction_err_)
+
+
+def _resolve_torch_device(device_name):
+    if not TORCH_AVAILABLE:
+        raise RuntimeError("Torch backend requested for NMF, but torch is not installed.")
+    if device_name == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(device_name)
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA requested for NMF, but torch.cuda.is_available() is false.")
+    return device
+
+
+def _torch_dtype_for_device(device):
+    return torch.float32 if device.type == "cuda" else torch.float64
+
+
+def _torch_to_numpy(tensor):
+    return tensor.detach().cpu().numpy()
+
+
+def _torch_factor_redundancy(H):
+    H_norm = torch.linalg.norm(H, dim=1, keepdim=True).clamp_min(poisson_eps)
+    sim = (H / H_norm) @ (H / H_norm).T
+    sim.fill_diagonal_(0.0)
+    return float(torch.max(sim).detach().cpu().item())
+
+
+def _torch_frobenius_error(X, W, H):
+    return float(torch.linalg.norm(X - W @ H, ord="fro").detach().cpu().item())
+
+
+def _torch_kl_error(X, WH):
+    ratio = X / WH.clamp_min(poisson_eps)
+    value = X * torch.log(ratio.clamp_min(poisson_eps)) - X + WH
+    return float(torch.sum(value).detach().cpu().item())
+
+
+def _torch_init_factors(X, k, seed, device):
+    generator = torch.Generator(device=device.type)
+    generator.manual_seed(int(seed))
+    dtype = _torch_dtype_for_device(device)
+    n_samples, n_features = X.shape
+    W = torch.rand((n_samples, k), generator=generator, device=device, dtype=dtype).clamp_min(1e-4)
+    H = torch.rand((k, n_features), generator=generator, device=device, dtype=dtype).clamp_min(1e-4)
+    return W, H
+
+
+def _run_torch_nmf(matrix, k, seed, max_iter, loss):
+    device = _resolve_torch_device(nmf_device)
+    dtype = _torch_dtype_for_device(device)
+    X_t = torch.as_tensor(matrix, device=device, dtype=dtype).clamp_min(poisson_eps)
+    W, H = _torch_init_factors(X_t, k, seed, device)
+
+    previous_error = None
+    patience = 25
+    stale_steps = 0
+
+    for iteration in range(int(max_iter)):
+        WH = (W @ H).clamp_min(poisson_eps)
+        if loss == "frobenius":
+            H = H * ((W.T @ X_t) / ((W.T @ W @ H).clamp_min(poisson_eps)))
+            WH = (W @ H).clamp_min(poisson_eps)
+            W = W * ((X_t @ H.T) / ((W @ (H @ H.T)).clamp_min(poisson_eps)))
+        elif loss == "kullback-leibler":
+            ratio = X_t / WH
+            H = H * ((W.T @ ratio) / (torch.sum(W, dim=0, keepdim=True).T.clamp_min(poisson_eps)))
+            WH = (W @ H).clamp_min(poisson_eps)
+            ratio = X_t / WH
+            W = W * ((ratio @ H.T) / (torch.sum(H, dim=1, keepdim=True).T.clamp_min(poisson_eps)))
+        else:
+            raise ValueError(f"Unsupported torch NMF loss: {loss}")
+
+        W = W.clamp_min(poisson_eps)
+        H = H.clamp_min(poisson_eps)
+
+        if iteration % 20 == 0 or iteration == int(max_iter) - 1:
+            if loss == "frobenius":
+                current_error = _torch_frobenius_error(X_t, W, H)
+            else:
+                current_error = _torch_kl_error(X_t, (W @ H).clamp_min(poisson_eps))
+            if previous_error is not None and abs(previous_error - current_error) <= 1e-5 * max(1.0, previous_error):
+                stale_steps += 1
+                if stale_steps >= patience:
+                    break
+            else:
+                stale_steps = 0
+            previous_error = current_error
+
+    if previous_error is None:
+        if loss == "frobenius":
+            previous_error = _torch_frobenius_error(X_t, W, H)
+        else:
+            previous_error = _torch_kl_error(X_t, (W @ H).clamp_min(poisson_eps))
+
+    return _torch_to_numpy(W), _torch_to_numpy(H), NMFResult(previous_error)
 
 
 def run_standard_nmf(matrix, k, seed=0, max_iter=1000):
+    if nmf_backend == "torch":
+        return _run_torch_nmf(matrix, k, seed, max_iter=max_iter, loss="frobenius")
     model = NMF(n_components=k, init="nndsvda", random_state=seed, max_iter=max_iter)
     W = model.fit_transform(matrix)
     H = model.components_
@@ -35,6 +148,8 @@ def run_standard_nmf(matrix, k, seed=0, max_iter=1000):
 
 
 def run_kl_nmf(matrix, k, seed, max_iter=5000):
+    if nmf_backend == "torch":
+        return _run_torch_nmf(matrix, k, seed, max_iter=max_iter, loss="kullback-leibler")
     model = NMF(
         n_components=k,
         init="nndsvda",
@@ -50,6 +165,10 @@ def run_kl_nmf(matrix, k, seed, max_iter=5000):
 
 
 def factor_redundancy(H):
+    if nmf_backend == "torch":
+        device = _resolve_torch_device(nmf_device)
+        H_t = torch.as_tensor(H, device=device, dtype=_torch_dtype_for_device(device))
+        return _torch_factor_redundancy(H_t)
     sim = cosine_similarity(H)
     np.fill_diagonal(sim, 0.0)
     return float(np.max(sim))
@@ -58,6 +177,10 @@ def factor_redundancy(H):
 print("--- Loading cell2location-only h5ad for NMF ---")
 adata_st = sc.read(input_h5ad_path)
 print(f"Loaded adata_st shape: {adata_st.shape}")
+print(f"NMF backend: {nmf_backend}")
+print(f"NMF device: {nmf_device}")
+if TORCH_AVAILABLE:
+    print(f"Torch CUDA available: {torch.cuda.is_available()}")
 
 try:
     X = np.array(adata_st.uns["mod"]["post_sample_means"]["w_sf"])

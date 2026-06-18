@@ -1,0 +1,31 @@
+{
+  "id": "kidney_cosmx_ssc_poisson75_hpg_nmf_gpu",
+  "label": "Kidney CosMx HD/SSc (NMF-only, HPG GPU)",
+  "organ": "kidney",
+  "platform": "cosmx",
+  "run_name": "kidney_cosmx_ssc_poisson75_split_nmf_gpu",
+  "output_dir": "/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/kidney_cosmx_ssc_poisson75_split/outputs",
+  "mode": "poisson_cumulative_improvement_k",
+  "k_min": 2,
+  "k_max": 20,
+  "poisson_n_runs": 10,
+  "poisson_max_iter": 5000,
+  "poisson_normalize_rows_to_sum1": false,
+  "poisson_cumulative_improvement_target": 0.75,
+  "nmf_backend": "torch",
+  "nmf_device": "cuda",
+  "stages": ["nmf"],
+  "slurm": {
+    "enabled": true,
+    "job_name": "kidney_p75_nmf_gpu",
+    "account": "kejun.huang",
+    "time": "96:00:00",
+    "mem": "160gb",
+    "cpus_per_task": 8,
+    "qos": "kejun.huang-b",
+    "gres": "gpu:1",
+    "mail_user": "vasco.hinostroza@ufl.edu",
+    "mail_type": "ALL",
+    "conda_env": "/blue/kejun.huang/tan.m/cell2location_cuda118_torch22"
+  }
+}
