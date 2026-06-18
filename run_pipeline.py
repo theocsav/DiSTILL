@@ -916,9 +916,25 @@ def main():
         extra_args = " ".join(shell_quote(arg) for arg in args_list)
         mlp_feature_scope = str(config.get("mlp_feature_scope", "patient")).strip().lower()
         mlp_output_subdir = config.get("mlp_output_subdir")
+        mlp_backend = config.get("mlp_backend")
+        mlp_device = config.get("mlp_device")
+        mlp_max_epochs = config.get("mlp_max_epochs")
+        mlp_patience = config.get("mlp_patience")
+        mlp_skip_shap = config.get("mlp_skip_shap")
         if not mlp_output_subdir:
             mlp_output_subdir = "MLP_FOVFeatures" if mlp_feature_scope == "fov" else "MLP_44Features"
         mlp_output_dir = str(Path(output_dir) / mlp_output_subdir)
+        mlp_env_parts = []
+        if mlp_backend is not None:
+            mlp_env_parts.append(f"NICHERUNNER_MLP_BACKEND={shell_quote(str(mlp_backend))}")
+        if mlp_device is not None:
+            mlp_env_parts.append(f"NICHERUNNER_MLP_DEVICE={shell_quote(str(mlp_device))}")
+        if mlp_max_epochs is not None:
+            mlp_env_parts.append(f"NICHERUNNER_MLP_MAX_EPOCHS={shell_quote(str(mlp_max_epochs))}")
+        if mlp_patience is not None:
+            mlp_env_parts.append(f"NICHERUNNER_MLP_PATIENCE={shell_quote(str(mlp_patience))}")
+        if mlp_skip_shap is not None:
+            mlp_env_parts.append(f"NICHERUNNER_SKIP_SHAP={shell_quote('1' if mlp_skip_shap else '0')}")
         if mlp_feature_scope == "fov":
             builder_source = resolve_template(root, config.get("mlp_input_builder_script", DEFAULT_FOV_MLP_INPUT_BUILDER))
             if not builder_source.exists():
@@ -939,6 +955,7 @@ def main():
                 f"NICHERUNNER_SOURCE_OUTPUT_DIR={shell_quote(output_dir)} "
                 f"NICHERUNNER_MLP_UNIT={shell_quote('fov')} "
                 f"NICHERUNNER_MLP_OUTPUT_DIR={shell_quote(mlp_output_dir)} "
+                f"{' '.join(mlp_env_parts)} "
                 f"python {shell_quote(script_copy)} {extra_args}"
             ).strip()
             mlp_stage_script = run_dir_path / "run_mlp_stage.sh"
@@ -964,6 +981,7 @@ def main():
                         f"NICHERUNNER_SOURCE_OUTPUT_DIR={shell_quote(output_dir)} "
                         f"NICHERUNNER_MLP_UNIT={shell_quote('patient')} "
                         f"NICHERUNNER_MLP_OUTPUT_DIR={shell_quote(mlp_output_dir)} "
+                        f"{' '.join(mlp_env_parts)} "
                         f"python {shell_quote(script_copy)} {extra_args}"
                     ).strip(),
                 )

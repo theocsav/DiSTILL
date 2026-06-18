@@ -27,6 +27,19 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+try:
+    import torch
+    from torch import nn
+    from torch.utils.data import DataLoader, TensorDataset
+
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+    torch = None
+    nn = None
+    DataLoader = None
+    TensorDataset = None
+
 
 def _pick_column(columns, candidates):
     for candidate in candidates:
@@ -105,6 +118,193 @@ def _score_fold(y_true: pd.Series, y_pred: np.ndarray, labels: list[str]) -> dic
     }
 
 
+class TorchMLPClassifierWrapper:
+    def __init__(
+        self,
+        *,
+        hidden_layer_sizes,
+        activation,
+        alpha,
+        learning_rate_init,
+        batch_size,
+        device_name,
+        max_epochs,
+        patience,
+        random_state,
+    ):
+        if not TORCH_AVAILABLE:
+            raise RuntimeError("Torch backend requested, but torch is not installed in this environment.")
+        self.hidden_layer_sizes = tuple(hidden_layer_sizes)
+        self.activation = activation
+        self.alpha = float(alpha)
+        self.learning_rate_init = float(learning_rate_init)
+        self.batch_size = int(batch_size)
+        self.device_name = device_name
+        self.max_epochs = int(max_epochs)
+        self.patience = int(patience)
+        self.random_state = int(random_state)
+        self.scaler = StandardScaler()
+        self.classes_ = None
+        self.class_to_index_ = None
+        self.model_ = None
+        self.device_ = None
+
+    def _resolve_device(self):
+        if self.device_name == "auto":
+            if torch.cuda.is_available():
+                return torch.device("cuda")
+            return torch.device("cpu")
+        requested = torch.device(self.device_name)
+        if requested.type == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError("CUDA device requested for MLP, but torch.cuda.is_available() is false.")
+        return requested
+
+    def _activation_module(self):
+        if self.activation == "relu":
+            return nn.ReLU
+        if self.activation == "tanh":
+            return nn.Tanh
+        raise ValueError(f"Unsupported activation for torch backend: {self.activation}")
+
+    def _build_network(self, input_dim: int, output_dim: int):
+        layers = []
+        current_dim = input_dim
+        activation_cls = self._activation_module()
+        for hidden_dim in self.hidden_layer_sizes:
+            layers.append(nn.Linear(current_dim, int(hidden_dim)))
+            layers.append(activation_cls())
+            current_dim = int(hidden_dim)
+        layers.append(nn.Linear(current_dim, output_dim))
+        return nn.Sequential(*layers)
+
+    def fit(self, X: pd.DataFrame, y: pd.Series):
+        torch.manual_seed(self.random_state)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(self.random_state)
+
+        X_np = self.scaler.fit_transform(X.to_numpy(dtype=np.float32, copy=False)).astype(np.float32)
+        classes = sorted(pd.Series(y).astype(str).unique().tolist())
+        class_to_index = {label: index for index, label in enumerate(classes)}
+        y_idx = np.asarray([class_to_index[str(value)] for value in y], dtype=np.int64)
+
+        self.classes_ = np.asarray(classes)
+        self.class_to_index_ = class_to_index
+        self.device_ = self._resolve_device()
+        self.model_ = self._build_network(X_np.shape[1], len(classes)).to(self.device_)
+
+        dataset = TensorDataset(torch.from_numpy(X_np), torch.from_numpy(y_idx))
+        loader = DataLoader(
+            dataset,
+            batch_size=max(1, min(self.batch_size, len(dataset))),
+            shuffle=True,
+            num_workers=0,
+            pin_memory=self.device_.type == "cuda",
+        )
+
+        criterion = nn.CrossEntropyLoss()
+        optimizer = torch.optim.Adam(
+            self.model_.parameters(),
+            lr=self.learning_rate_init,
+            weight_decay=self.alpha,
+        )
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=0.5,
+            patience=max(2, self.patience // 4),
+        )
+
+        best_state = None
+        best_loss = float("inf")
+        epochs_without_improvement = 0
+
+        for _epoch in range(self.max_epochs):
+            self.model_.train()
+            batch_losses = []
+            for batch_X, batch_y in loader:
+                batch_X = batch_X.to(self.device_, non_blocking=self.device_.type == "cuda")
+                batch_y = batch_y.to(self.device_, non_blocking=self.device_.type == "cuda")
+
+                optimizer.zero_grad(set_to_none=True)
+                logits = self.model_(batch_X)
+                loss = criterion(logits, batch_y)
+                loss.backward()
+                optimizer.step()
+                batch_losses.append(float(loss.detach().cpu().item()))
+
+            epoch_loss = float(np.mean(batch_losses)) if batch_losses else float("inf")
+            scheduler.step(epoch_loss)
+
+            if epoch_loss + 1e-8 < best_loss:
+                best_loss = epoch_loss
+                epochs_without_improvement = 0
+                best_state = {key: value.detach().cpu().clone() for key, value in self.model_.state_dict().items()}
+            else:
+                epochs_without_improvement += 1
+                if epochs_without_improvement >= self.patience:
+                    break
+
+        if best_state is not None:
+            self.model_.load_state_dict(best_state)
+
+        return self
+
+    def predict_proba(self, X):
+        if self.model_ is None:
+            raise RuntimeError("TorchMLPClassifierWrapper must be fit before predict_proba.")
+        if isinstance(X, pd.DataFrame):
+            X_np = X.to_numpy(dtype=np.float32, copy=False)
+        else:
+            X_np = np.asarray(X, dtype=np.float32)
+        X_scaled = self.scaler.transform(X_np).astype(np.float32)
+        self.model_.eval()
+        with torch.no_grad():
+            tensor = torch.from_numpy(X_scaled).to(self.device_, non_blocking=self.device_.type == "cuda")
+            logits = self.model_(tensor)
+            probs = torch.softmax(logits, dim=1).detach().cpu().numpy()
+        return probs
+
+    def predict(self, X):
+        probs = self.predict_proba(X)
+        class_indices = np.argmax(probs, axis=1)
+        return self.classes_[class_indices]
+
+
+def _build_model(params, *, backend, device_name, max_epochs, patience, random_state):
+    if backend == "torch":
+        return TorchMLPClassifierWrapper(
+            hidden_layer_sizes=params["hidden_layer_sizes"],
+            activation=params["activation"],
+            alpha=params["alpha"],
+            learning_rate_init=params["learning_rate_init"],
+            batch_size=params["batch_size"],
+            device_name=device_name,
+            max_epochs=max_epochs,
+            patience=patience,
+            random_state=random_state,
+        )
+
+    return Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            (
+                "mlp",
+                MLPClassifier(
+                    hidden_layer_sizes=params["hidden_layer_sizes"],
+                    activation=params["activation"],
+                    alpha=params["alpha"],
+                    learning_rate_init=params["learning_rate_init"],
+                    batch_size=params["batch_size"],
+                    solver="adam",
+                    learning_rate="adaptive",
+                    max_iter=max_epochs,
+                    random_state=random_state,
+                ),
+            ),
+        ]
+    )
+
+
 def _fit_inner_model(X_train: pd.DataFrame, y_train: pd.Series, groups_train: pd.Series):
     logo = LeaveOneGroupOut()
     all_labels = sorted(y_train.unique())
@@ -139,6 +339,13 @@ def _fit_inner_model(X_train: pd.DataFrame, y_train: pd.Series, groups_train: pd
         param_grid["learning_rate_init"],
         param_grid["batch_size"],
     ):
+        params = {
+            "hidden_layer_sizes": hidden_sizes,
+            "activation": activation,
+            "alpha": alpha,
+            "learning_rate_init": learning_rate_init,
+            "batch_size": batch_size,
+        }
         fold_scores = []
         for inner_train_idx, inner_test_idx in logo.split(X_train, y_train, group_values):
             X_inner_train = X_train.iloc[inner_train_idx]
@@ -146,24 +353,13 @@ def _fit_inner_model(X_train: pd.DataFrame, y_train: pd.Series, groups_train: pd
             y_inner_train = y_train.iloc[inner_train_idx]
             y_inner_test = y_train.iloc[inner_test_idx]
 
-            model = Pipeline(
-                [
-                    ("scaler", StandardScaler()),
-                    (
-                        "mlp",
-                        MLPClassifier(
-                            hidden_layer_sizes=hidden_sizes,
-                            activation=activation,
-                            alpha=alpha,
-                            learning_rate_init=learning_rate_init,
-                            batch_size=batch_size,
-                            solver="adam",
-                            learning_rate="adaptive",
-                            max_iter=1000,
-                            random_state=42,
-                        ),
-                    ),
-                ]
+            model = _build_model(
+                params,
+                backend=mlp_backend,
+                device_name=mlp_device,
+                max_epochs=mlp_max_epochs,
+                patience=mlp_patience,
+                random_state=42,
             )
             model.fit(X_inner_train, y_inner_train)
             y_pred = model.predict(X_inner_test)
@@ -180,28 +376,22 @@ def _fit_inner_model(X_train: pd.DataFrame, y_train: pd.Series, groups_train: pd
                 "mlp__alpha": alpha,
                 "mlp__learning_rate_init": learning_rate_init,
                 "mlp__batch_size": batch_size,
-                "mlp__solver": "adam",
-                "mlp__learning_rate": "adaptive",
-                "mlp__max_iter": 1000,
+                "mlp__backend": mlp_backend,
+                "mlp__device": mlp_device,
+                "mlp__max_iter": mlp_max_epochs,
             }
-            best_model = Pipeline(
-                [
-                    ("scaler", StandardScaler()),
-                    (
-                        "mlp",
-                        MLPClassifier(
-                            hidden_layer_sizes=hidden_sizes,
-                            activation=activation,
-                            alpha=alpha,
-                            learning_rate_init=learning_rate_init,
-                            batch_size=batch_size,
-                            solver="adam",
-                            learning_rate="adaptive",
-                            max_iter=1000,
-                            random_state=42,
-                        ),
-                    ),
-                ]
+            if mlp_backend == "sklearn":
+                best_params["mlp__solver"] = "adam"
+                best_params["mlp__learning_rate"] = "adaptive"
+            else:
+                best_params["mlp__patience"] = mlp_patience
+            best_model = _build_model(
+                params,
+                backend=mlp_backend,
+                device_name=mlp_device,
+                max_epochs=mlp_max_epochs,
+                patience=mlp_patience,
+                random_state=42,
             )
 
     if best_model is None or best_params is None:
@@ -266,6 +456,13 @@ output_path = output_dir / "mlp_results.txt"
 top_enrichment = int(os.environ.get("NICHERUNNER_TOP_ENRICHMENT_FEATURES", "5"))
 top_niche_gene = int(os.environ.get("NICHERUNNER_TOP_NICHE_GENE_FEATURES", "20"))
 skip_shap = os.environ.get("NICHERUNNER_SKIP_SHAP", "0") == "1"
+mlp_backend = os.environ.get("NICHERUNNER_MLP_BACKEND", "sklearn").strip().lower()
+mlp_device = os.environ.get("NICHERUNNER_MLP_DEVICE", "auto").strip().lower()
+mlp_max_epochs = int(os.environ.get("NICHERUNNER_MLP_MAX_EPOCHS", "1000"))
+mlp_patience = int(os.environ.get("NICHERUNNER_MLP_PATIENCE", "20"))
+
+if mlp_backend not in {"sklearn", "torch"}:
+    raise ValueError("NICHERUNNER_MLP_BACKEND must be either 'sklearn' or 'torch'.")
 
 original_stdout = sys.stdout
 sys.stdout = open(output_path, "w", encoding="utf-8")
@@ -276,6 +473,13 @@ try:
     print("Outer CV mode: logo_grouped")
     print("Inner CV mode: nested training-only tuning with grouped splits")
     print(f"Skip SHAP: {skip_shap}")
+    print(f"MLP backend: {mlp_backend}")
+    print(f"MLP device: {mlp_device}")
+    print(f"MLP max epochs: {mlp_max_epochs}")
+    if mlp_backend == "torch":
+        print(f"Torch available: {TORCH_AVAILABLE}")
+        if TORCH_AVAILABLE:
+            print(f"CUDA available: {torch.cuda.is_available()}")
 
     if mlp_unit == "fov":
         nmf_props, enrichment_frame, niche_gene_frame, y, groups = _prepare_fov_frames(
