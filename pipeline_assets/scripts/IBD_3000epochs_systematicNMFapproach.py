@@ -236,7 +236,6 @@ model_ref_trained.train(
     train_size=1,
     lr=0.002,
     accelerator=c2l_train_accelerator,
-    devices=c2l_train_devices,
 )
 print("\nReference Model training complete.")
 model_ref_trained.save(ref_model_path, overwrite=True)
@@ -468,7 +467,6 @@ model.train(
     batch_size=None,
     train_size=1,
     accelerator=c2l_train_accelerator,
-    devices=c2l_train_devices,
 )
 
 # plot training history
