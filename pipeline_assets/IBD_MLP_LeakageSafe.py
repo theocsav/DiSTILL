@@ -115,6 +115,7 @@ def _score_fold(y_true: pd.Series, y_pred: np.ndarray, labels: list[str]) -> dic
         "precision": precision_score(y_true, y_pred, labels=labels, average="weighted", zero_division=0),
         "recall": recall_score(y_true, y_pred, labels=labels, average="weighted", zero_division=0),
         "f1": f1_score(y_true, y_pred, labels=labels, average="weighted", zero_division=0),
+        "macro_f1": f1_score(y_true, y_pred, labels=labels, average="macro", zero_division=0),
     }
 
 
@@ -302,6 +303,58 @@ def _to_serializable_params(params: dict) -> dict:
     }
 
 
+def _resolve_param_grid(profile: str) -> dict:
+    if profile == "expanded":
+        return {
+            "hidden_layer_sizes": [
+                (8,),
+                (16,),
+                (32,),
+                (64,),
+                (128,),
+                (16, 8),
+                (32, 16),
+                (64, 32),
+                (128, 64),
+                (32, 16, 8),
+                (64, 32, 16),
+                (128, 64, 32),
+                (40, 20, 10, 5),
+            ],
+            "activation": ["relu", "tanh"],
+            "alpha": [1e-5, 1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1, 3e-1],
+            "learning_rate_init": [1e-4, 3e-4, 1e-3, 3e-3, 1e-2],
+            "batch_size": [8, 16, 32],
+        }
+    return {
+        "hidden_layer_sizes": [
+            (8,),
+            (16,),
+            (32,),
+            (64,),
+            (16, 8),
+            (32, 16),
+            (64, 32),
+            (32, 16, 8),
+            (40, 20, 10, 5),
+        ],
+        "activation": ["relu", "tanh"],
+        "alpha": [1e-5, 1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1],
+        "learning_rate_init": [1e-4, 3e-4, 1e-3, 3e-3, 1e-2],
+        "batch_size": [8, 16, 32],
+    }
+
+
+def _selection_score(y_true: pd.Series, y_pred: np.ndarray, labels: list[str]) -> float:
+    if mlp_selection_metric == "weighted_f1":
+        return float(f1_score(y_true, y_pred, labels=labels, average="weighted", zero_division=0))
+    if mlp_selection_metric == "macro_f1":
+        return float(f1_score(y_true, y_pred, labels=labels, average="macro", zero_division=0))
+    if mlp_selection_metric == "balanced_accuracy":
+        return float(balanced_accuracy_score(y_true, y_pred))
+    raise ValueError(f"Unsupported MLP selection metric: {mlp_selection_metric}")
+
+
 def _build_model(params, *, backend, device_name, max_epochs, patience, random_state):
     if backend == "torch":
         return TorchMLPClassifierWrapper(
@@ -342,23 +395,7 @@ def _fit_inner_model(X_train: pd.DataFrame, y_train: pd.Series, groups_train: pd
     all_labels = sorted(y_train.unique())
     group_values = groups_train.to_numpy()
 
-    param_grid = {
-        "hidden_layer_sizes": [
-            (8,),
-            (16,),
-            (32,),
-            (64,),
-            (16, 8),
-            (32, 16),
-            (64, 32),
-            (32, 16, 8),
-            (40, 20, 10, 5),
-        ],
-        "activation": ["relu", "tanh"],
-        "alpha": [1e-5, 1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1],
-        "learning_rate_init": [1e-4, 3e-4, 1e-3, 3e-3, 1e-2],
-        "batch_size": [8, 16, 32],
-    }
+    param_grid = _resolve_param_grid(mlp_grid_profile)
 
     best_score = -np.inf
     best_params = None
@@ -395,7 +432,7 @@ def _fit_inner_model(X_train: pd.DataFrame, y_train: pd.Series, groups_train: pd
             model.fit(X_inner_train, y_inner_train)
             y_pred = model.predict(X_inner_test)
             fold_scores.append(
-                f1_score(y_inner_test, y_pred, labels=all_labels, average="weighted", zero_division=0)
+                _selection_score(y_inner_test, y_pred, all_labels)
             )
 
         mean_score = float(np.mean(fold_scores)) if fold_scores else -np.inf
@@ -427,10 +464,12 @@ def _load_fixed_params(path: Path) -> dict:
 def _save_fixed_params(path: Path, params: dict, *, selection_score: float | None = None, selection_scope: str = "grouped_full_data"):
     payload = {
         "selection_scope": selection_scope,
+        "selection_metric": mlp_selection_metric,
+        "grid_profile": mlp_grid_profile,
         "best_params": _to_serializable_params(params),
     }
     if selection_score is not None:
-        payload["selection_score_weighted_f1"] = float(selection_score)
+        payload["selection_score"] = float(selection_score)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
 
@@ -452,7 +491,7 @@ def _search_best_params(X_train: pd.DataFrame, y_train: pd.Series, groups_train:
         search_model.fit(X_train.iloc[inner_train_idx], y_train.iloc[inner_train_idx])
         y_pred = search_model.predict(X_train.iloc[inner_test_idx])
         fold_scores.append(
-            f1_score(y_train.iloc[inner_test_idx], y_pred, labels=all_labels, average="weighted", zero_division=0)
+            _selection_score(y_train.iloc[inner_test_idx], y_pred, all_labels)
         )
     return model, params, float(np.mean(fold_scores)) if fold_scores else float("nan")
 
@@ -518,6 +557,8 @@ mlp_backend = os.environ.get("NICHERUNNER_MLP_BACKEND", "sklearn").strip().lower
 mlp_device = os.environ.get("NICHERUNNER_MLP_DEVICE", "auto").strip().lower()
 mlp_max_epochs = int(os.environ.get("NICHERUNNER_MLP_MAX_EPOCHS", "1000"))
 mlp_patience = int(os.environ.get("NICHERUNNER_MLP_PATIENCE", "20"))
+mlp_selection_metric = os.environ.get("NICHERUNNER_MLP_SELECTION_METRIC", "weighted_f1").strip().lower()
+mlp_grid_profile = os.environ.get("NICHERUNNER_MLP_GRID_PROFILE", "default").strip().lower()
 mlp_mode = os.environ.get("NICHERUNNER_MLP_MODE", "nested_cv").strip().lower()
 mlp_fixed_params_path_env = os.environ.get("NICHERUNNER_MLP_FIXED_PARAMS_PATH", "").strip()
 mlp_best_params_out_env = os.environ.get("NICHERUNNER_MLP_BEST_PARAMS_OUT", "").strip()
@@ -526,6 +567,10 @@ if mlp_backend not in {"sklearn", "torch"}:
     raise ValueError("NICHERUNNER_MLP_BACKEND must be either 'sklearn' or 'torch'.")
 if mlp_mode not in {"nested_cv", "tune_once", "evaluate_fixed", "explain"}:
     raise ValueError("NICHERUNNER_MLP_MODE must be one of: nested_cv, tune_once, evaluate_fixed, explain.")
+if mlp_selection_metric not in {"weighted_f1", "macro_f1", "balanced_accuracy"}:
+    raise ValueError("NICHERUNNER_MLP_SELECTION_METRIC must be one of: weighted_f1, macro_f1, balanced_accuracy.")
+if mlp_grid_profile not in {"default", "expanded"}:
+    raise ValueError("NICHERUNNER_MLP_GRID_PROFILE must be either 'default' or 'expanded'.")
 
 mlp_fixed_params_path = Path(mlp_fixed_params_path_env) if mlp_fixed_params_path_env else (output_dir / "fixed_params.json")
 mlp_best_params_out = Path(mlp_best_params_out_env) if mlp_best_params_out_env else (output_dir / "fixed_params.json")
@@ -542,6 +587,8 @@ try:
     print(f"MLP backend: {mlp_backend}")
     print(f"MLP device: {mlp_device}")
     print(f"MLP max epochs: {mlp_max_epochs}")
+    print(f"MLP selection metric: {mlp_selection_metric}")
+    print(f"MLP grid profile: {mlp_grid_profile}")
     print(f"MLP mode: {mlp_mode}")
     print(f"Fixed params path: {mlp_fixed_params_path}")
     print(f"Best params out: {mlp_best_params_out}")
@@ -588,7 +635,7 @@ try:
         _model, best_params, search_score = _search_best_params(X_explain, y, groups)
         _save_fixed_params(mlp_best_params_out, best_params, selection_score=search_score)
         print(f"Saved fixed params to: {mlp_best_params_out}")
-        print(f"Grouped full-data weighted F1 for tuned params: {search_score:.3f}")
+        print(f"Grouped full-data selection score for tuned params: {search_score:.3f}")
         print(f"Best params: {_to_serializable_params(best_params)}")
         final_params_for_explain = best_params
 

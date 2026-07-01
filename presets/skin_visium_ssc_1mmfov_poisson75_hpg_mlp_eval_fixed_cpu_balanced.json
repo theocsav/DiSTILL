@@ -1,0 +1,37 @@
+{
+  "id": "skin_visium_ssc_1mmfov_poisson75_hpg_mlp_eval_fixed_cpu_balanced",
+  "label": "Skin Visium HC/SSc 1mm pseudo-FOV (MLP evaluate-fixed balanced, HPG CPU)",
+  "organ": "skin",
+  "platform": "visium",
+  "run_name": "skin_visium_ssc_1mmfov_poisson75_mlp_eval_fixed_cpu_balanced",
+  "output_dir": "/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/skin_visium_ssc_1mmfov_poisson75_split/outputs",
+  "stages": [
+    "mlp",
+    "report"
+  ],
+  "mlp_script_path": "pipeline_assets/IBD_MLP_LeakageSafe.py",
+  "mlp_feature_scope": "fov",
+  "mlp_mode": "evaluate_fixed",
+  "mlp_backend": "sklearn",
+  "mlp_selection_metric": "macro_f1",
+  "mlp_grid_profile": "expanded",
+  "mlp_max_epochs": 1000,
+  "mlp_patience": 20,
+  "mlp_skip_shap": true,
+  "mlp_output_subdir": "MLP_FOVFeatures_eval_fixed_balanced",
+  "mlp_input_subdir": "MLP_FOVFeatures_inputs",
+  "mlp_fixed_params_path": "/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/skin_visium_ssc_1mmfov_poisson75_split/outputs/MLP_FOVFeatures_tune_once_balanced/fixed_params.json",
+  "report_title": "NicheRunner Skin Visium HC/SSc Run (MLP fixed-parameter balanced evaluation)",
+  "slurm": {
+    "enabled": true,
+    "job_name": "skin_p75_evb",
+    "account": "kejun.huang",
+    "time": "48:00:00",
+    "mem": "64gb",
+    "cpus_per_task": 8,
+    "qos": "kejun.huang-b",
+    "mail_user": "vasco.hinostroza@ufl.edu",
+    "mail_type": "ALL",
+    "conda_env": "/blue/kejun.huang/vasco.hinostroza/nicherunner/conda/envs/ibd_cosmx_k4"
+  }
+}

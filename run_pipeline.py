@@ -950,6 +950,8 @@ def main():
         mlp_patience = config.get("mlp_patience")
         mlp_skip_shap = config.get("mlp_skip_shap")
         mlp_mode = config.get("mlp_mode")
+        mlp_selection_metric = config.get("mlp_selection_metric")
+        mlp_grid_profile = config.get("mlp_grid_profile")
         mlp_fixed_params_path = config.get("mlp_fixed_params_path")
         mlp_best_params_out = config.get("mlp_best_params_out")
         if not mlp_output_subdir:
@@ -958,6 +960,10 @@ def main():
         mlp_env_parts = []
         if mlp_mode is not None:
             mlp_env_parts.append(f"NICHERUNNER_MLP_MODE={shell_quote(str(mlp_mode))}")
+        if mlp_selection_metric is not None:
+            mlp_env_parts.append(f"NICHERUNNER_MLP_SELECTION_METRIC={shell_quote(str(mlp_selection_metric))}")
+        if mlp_grid_profile is not None:
+            mlp_env_parts.append(f"NICHERUNNER_MLP_GRID_PROFILE={shell_quote(str(mlp_grid_profile))}")
         if mlp_backend is not None:
             mlp_env_parts.append(f"NICHERUNNER_MLP_BACKEND={shell_quote(str(mlp_backend))}")
         if mlp_device is not None:
