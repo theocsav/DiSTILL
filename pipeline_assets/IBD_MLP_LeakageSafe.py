@@ -270,6 +270,38 @@ class TorchMLPClassifierWrapper:
         return self.classes_[class_indices]
 
 
+def _to_internal_params(best_params: dict) -> dict:
+    if "hidden_layer_sizes" in best_params:
+        return {
+            "hidden_layer_sizes": tuple(best_params["hidden_layer_sizes"]),
+            "activation": best_params["activation"],
+            "alpha": float(best_params["alpha"]),
+            "learning_rate_init": float(best_params["learning_rate_init"]),
+            "batch_size": int(best_params["batch_size"]),
+        }
+    return {
+        "hidden_layer_sizes": tuple(best_params["mlp__hidden_layer_sizes"]),
+        "activation": best_params["mlp__activation"],
+        "alpha": float(best_params["mlp__alpha"]),
+        "learning_rate_init": float(best_params["mlp__learning_rate_init"]),
+        "batch_size": int(best_params["mlp__batch_size"]),
+    }
+
+
+def _to_serializable_params(params: dict) -> dict:
+    return {
+        "hidden_layer_sizes": list(params["hidden_layer_sizes"]),
+        "activation": params["activation"],
+        "alpha": float(params["alpha"]),
+        "learning_rate_init": float(params["learning_rate_init"]),
+        "batch_size": int(params["batch_size"]),
+        "backend": mlp_backend,
+        "device": mlp_device,
+        "max_epochs": mlp_max_epochs,
+        "patience": mlp_patience,
+    }
+
+
 def _build_model(params, *, backend, device_name, max_epochs, patience, random_state):
     if backend == "torch":
         return TorchMLPClassifierWrapper(
@@ -330,7 +362,6 @@ def _fit_inner_model(X_train: pd.DataFrame, y_train: pd.Series, groups_train: pd
 
     best_score = -np.inf
     best_params = None
-    best_model = None
 
     for hidden_sizes, activation, alpha, learning_rate_init, batch_size in product(
         param_grid["hidden_layer_sizes"],
@@ -370,33 +401,60 @@ def _fit_inner_model(X_train: pd.DataFrame, y_train: pd.Series, groups_train: pd
         mean_score = float(np.mean(fold_scores)) if fold_scores else -np.inf
         if mean_score > best_score:
             best_score = mean_score
-            best_params = {
-                "mlp__hidden_layer_sizes": hidden_sizes,
-                "mlp__activation": activation,
-                "mlp__alpha": alpha,
-                "mlp__learning_rate_init": learning_rate_init,
-                "mlp__batch_size": batch_size,
-                "mlp__backend": mlp_backend,
-                "mlp__device": mlp_device,
-                "mlp__max_iter": mlp_max_epochs,
-            }
-            if mlp_backend == "sklearn":
-                best_params["mlp__solver"] = "adam"
-                best_params["mlp__learning_rate"] = "adaptive"
-            else:
-                best_params["mlp__patience"] = mlp_patience
-            best_model = _build_model(
-                params,
-                backend=mlp_backend,
-                device_name=mlp_device,
-                max_epochs=mlp_max_epochs,
-                patience=mlp_patience,
-                random_state=42,
-            )
+            best_params = dict(params)
 
-    if best_model is None or best_params is None:
+    if best_params is None:
         raise RuntimeError("Inner model selection failed.")
+    best_model = _build_model(
+        best_params,
+        backend=mlp_backend,
+        device_name=mlp_device,
+        max_epochs=mlp_max_epochs,
+        patience=mlp_patience,
+        random_state=42,
+    )
     return best_model, best_params
+
+
+def _load_fixed_params(path: Path) -> dict:
+    with open(path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if isinstance(payload, dict) and "best_params" in payload:
+        payload = payload["best_params"]
+    return _to_internal_params(payload)
+
+
+def _save_fixed_params(path: Path, params: dict, *, selection_score: float | None = None, selection_scope: str = "grouped_full_data"):
+    payload = {
+        "selection_scope": selection_scope,
+        "best_params": _to_serializable_params(params),
+    }
+    if selection_score is not None:
+        payload["selection_score_weighted_f1"] = float(selection_score)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+
+
+def _search_best_params(X_train: pd.DataFrame, y_train: pd.Series, groups_train: pd.Series):
+    model, params = _fit_inner_model(X_train, y_train, groups_train)
+    logo = LeaveOneGroupOut()
+    all_labels = sorted(y_train.unique())
+    fold_scores = []
+    for inner_train_idx, inner_test_idx in logo.split(X_train, y_train, groups_train.to_numpy()):
+        search_model = _build_model(
+            params,
+            backend=mlp_backend,
+            device_name=mlp_device,
+            max_epochs=mlp_max_epochs,
+            patience=mlp_patience,
+            random_state=42,
+        )
+        search_model.fit(X_train.iloc[inner_train_idx], y_train.iloc[inner_train_idx])
+        y_pred = search_model.predict(X_train.iloc[inner_test_idx])
+        fold_scores.append(
+            f1_score(y_train.iloc[inner_test_idx], y_pred, labels=all_labels, average="weighted", zero_division=0)
+        )
+    return model, params, float(np.mean(fold_scores)) if fold_scores else float("nan")
 
 
 def _prepare_patient_frames(feature_input_dir: Path, source_output_dir: Path):
@@ -460,9 +518,17 @@ mlp_backend = os.environ.get("NICHERUNNER_MLP_BACKEND", "sklearn").strip().lower
 mlp_device = os.environ.get("NICHERUNNER_MLP_DEVICE", "auto").strip().lower()
 mlp_max_epochs = int(os.environ.get("NICHERUNNER_MLP_MAX_EPOCHS", "1000"))
 mlp_patience = int(os.environ.get("NICHERUNNER_MLP_PATIENCE", "20"))
+mlp_mode = os.environ.get("NICHERUNNER_MLP_MODE", "nested_cv").strip().lower()
+mlp_fixed_params_path_env = os.environ.get("NICHERUNNER_MLP_FIXED_PARAMS_PATH", "").strip()
+mlp_best_params_out_env = os.environ.get("NICHERUNNER_MLP_BEST_PARAMS_OUT", "").strip()
 
 if mlp_backend not in {"sklearn", "torch"}:
     raise ValueError("NICHERUNNER_MLP_BACKEND must be either 'sklearn' or 'torch'.")
+if mlp_mode not in {"nested_cv", "tune_once", "evaluate_fixed", "explain"}:
+    raise ValueError("NICHERUNNER_MLP_MODE must be one of: nested_cv, tune_once, evaluate_fixed, explain.")
+
+mlp_fixed_params_path = Path(mlp_fixed_params_path_env) if mlp_fixed_params_path_env else (output_dir / "fixed_params.json")
+mlp_best_params_out = Path(mlp_best_params_out_env) if mlp_best_params_out_env else (output_dir / "fixed_params.json")
 
 original_stdout = sys.stdout
 sys.stdout = open(output_path, "w", encoding="utf-8")
@@ -476,6 +542,9 @@ try:
     print(f"MLP backend: {mlp_backend}")
     print(f"MLP device: {mlp_device}")
     print(f"MLP max epochs: {mlp_max_epochs}")
+    print(f"MLP mode: {mlp_mode}")
+    print(f"Fixed params path: {mlp_fixed_params_path}")
+    print(f"Best params out: {mlp_best_params_out}")
     if mlp_backend == "torch":
         print(f"Torch available: {TORCH_AVAILABLE}")
         if TORCH_AVAILABLE:
@@ -503,95 +572,147 @@ try:
     all_labels = sorted(y.unique())
 
     unique_groups = list(pd.Index(groups.astype(str).unique()))
-    for fold_idx, (train_idx, test_idx) in enumerate(logo.split(X_full, y, groups), start=1):
-        train_items = X_full.index[train_idx]
-        test_items = X_full.index[test_idx]
-        train_groups = groups.iloc[train_idx]
-        test_groups = groups.iloc[test_idx]
-        print(f"--- Processing Outer Fold {fold_idx}/{len(unique_groups)} ---")
-        print(f"Train groups: {sorted(train_groups.astype(str).unique().tolist())}")
-        print(f"Test groups: {sorted(test_groups.astype(str).unique().tolist())}")
-        print(f"Train rows: {len(train_items)} | Test rows: {len(test_items)}")
-        sys.stdout.flush()
+    final_params_for_explain = None
 
-        y_train = y.loc[train_items]
-        y_test = y.loc[test_items]
-
-        selected_features = _select_features(
-            nmf_props.loc[train_items],
-            enrichment_frame.loc[train_items],
-            niche_gene_frame.loc[train_items],
-            y_train,
+    if mlp_mode == "tune_once":
+        print("--- Running one grouped hyperparameter search on full data ---")
+        selected_features_full = _select_features(
+            nmf_props,
+            enrichment_frame,
+            niche_gene_frame,
+            y,
             top_enrichment=top_enrichment,
             top_niche_gene=top_niche_gene,
         )
+        X_explain = X_full[selected_features_full]
+        _model, best_params, search_score = _search_best_params(X_explain, y, groups)
+        _save_fixed_params(mlp_best_params_out, best_params, selection_score=search_score)
+        print(f"Saved fixed params to: {mlp_best_params_out}")
+        print(f"Grouped full-data weighted F1 for tuned params: {search_score:.3f}")
+        print(f"Best params: {_to_serializable_params(best_params)}")
+        final_params_for_explain = best_params
 
-        X_train = X_full.loc[train_items, selected_features]
-        X_test = X_full.loc[test_items, selected_features]
+    elif mlp_mode in {"nested_cv", "evaluate_fixed"}:
+        fixed_params = None
+        if mlp_mode == "evaluate_fixed":
+            if not mlp_fixed_params_path.exists():
+                raise FileNotFoundError(f"Fixed params file not found: {mlp_fixed_params_path}")
+            fixed_params = _load_fixed_params(mlp_fixed_params_path)
+            print(f"Loaded fixed params: {_to_serializable_params(fixed_params)}")
 
-        model, best_params = _fit_inner_model(X_train, y_train, train_groups)
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
+        for fold_idx, (train_idx, test_idx) in enumerate(logo.split(X_full, y, groups), start=1):
+            train_items = X_full.index[train_idx]
+            test_items = X_full.index[test_idx]
+            train_groups = groups.iloc[train_idx]
+            test_groups = groups.iloc[test_idx]
+            print(f"--- Processing Outer Fold {fold_idx}/{len(unique_groups)} ---")
+            print(f"Train groups: {sorted(train_groups.astype(str).unique().tolist())}")
+            print(f"Test groups: {sorted(test_groups.astype(str).unique().tolist())}")
+            print(f"Train rows: {len(train_items)} | Test rows: {len(test_items)}")
+            sys.stdout.flush()
 
-        scores = _score_fold(y_test, y_pred, all_labels)
-        fold_accuracies.append(scores["accuracy"])
-        fold_precisions.append(scores["precision"])
-        fold_recalls.append(scores["recall"])
-        fold_f1_scores.append(scores["f1"])
-        all_y_true.extend(y_test.tolist())
-        all_y_pred.extend(y_pred.tolist())
+            y_train = y.loc[train_items]
+            y_test = y.loc[test_items]
 
-        fold_records.append(
-            {
-                "outer_fold": fold_idx,
-                "train_groups": sorted(train_groups.astype(str).unique().tolist()),
-                "test_groups": sorted(test_groups.astype(str).unique().tolist()),
-                "train_rows": int(len(train_items)),
-                "test_rows": int(len(test_items)),
-                "selected_feature_count": len(selected_features),
-                "selected_features": selected_features,
-                "best_params": best_params,
-            }
-        )
+            selected_features = _select_features(
+                nmf_props.loc[train_items],
+                enrichment_frame.loc[train_items],
+                niche_gene_frame.loc[train_items],
+                y_train,
+                top_enrichment=top_enrichment,
+                top_niche_gene=top_niche_gene,
+            )
 
-    print("\n--- Final Performance Report ---")
-    print(f"Accuracies for each fold: {np.round(fold_accuracies, 3)}")
-    print(f"Precisions for each fold: {np.round(fold_precisions, 3)}")
-    print(f"Recalls for each fold: {np.round(fold_recalls, 3)}")
-    print(f"F1-Scores for each fold: {np.round(fold_f1_scores, 3)}")
-    print("\n--- Mean and Standard Deviation ---")
-    print(f"Mean Accuracy: {np.mean(fold_accuracies):.3f} (+/- {np.std(fold_accuracies):.3f})")
-    print(f"Mean Precision: {np.mean(fold_precisions):.3f} (+/- {np.std(fold_precisions):.3f})")
-    print(f"Mean Recall: {np.mean(fold_recalls):.3f} (+/- {np.std(fold_recalls):.3f})")
-    print(f"Mean F1-Score: {np.mean(fold_f1_scores):.3f} (+/- {np.std(fold_f1_scores):.3f})")
-    print("\n--- Overall Classification Report ---")
-    print(classification_report(all_y_true, all_y_pred, zero_division=0))
-    print("\n--- Overall Confusion Matrix ---")
-    cm = confusion_matrix(all_y_true, all_y_pred, labels=np.unique(all_y_true))
-    cm_df = pd.DataFrame(cm, index=np.unique(all_y_true), columns=np.unique(all_y_true))
-    print(cm_df)
-    cm_df.to_csv(output_dir / "confusion_matrix.csv")
+            X_train = X_full.loc[train_items, selected_features]
+            X_test = X_full.loc[test_items, selected_features]
 
-    with open(output_dir / "best_params.json", "w", encoding="utf-8") as handle:
-        json.dump({"outer_folds": fold_records}, handle, indent=2)
-    pd.DataFrame(
-        [
-            {
-                "outer_fold": record["outer_fold"],
-                "train_groups": ",".join(record["train_groups"]),
-                "test_groups": ",".join(record["test_groups"]),
-                "train_rows": record["train_rows"],
-                "test_rows": record["test_rows"],
-                "selected_feature_count": record["selected_feature_count"],
-                "selected_features": "|".join(record["selected_features"]),
-            }
-            for record in fold_records
-        ]
-    ).to_csv(output_dir / "selected_features_by_fold.csv", index=False)
+            if mlp_mode == "nested_cv":
+                model, best_params = _fit_inner_model(X_train, y_train, train_groups)
+            else:
+                best_params = dict(fixed_params)
+                model = _build_model(
+                    best_params,
+                    backend=mlp_backend,
+                    device_name=mlp_device,
+                    max_epochs=mlp_max_epochs,
+                    patience=mlp_patience,
+                    random_state=42,
+                )
+            model.fit(X_train, y_train)
+            y_pred = model.predict(X_test)
 
-    if skip_shap:
-        print("\n--- SHAP skipped by configuration ---")
-    else:
+            scores = _score_fold(y_test, y_pred, all_labels)
+            fold_accuracies.append(scores["accuracy"])
+            fold_precisions.append(scores["precision"])
+            fold_recalls.append(scores["recall"])
+            fold_f1_scores.append(scores["f1"])
+            all_y_true.extend(y_test.tolist())
+            all_y_pred.extend(y_pred.tolist())
+
+            fold_records.append(
+                {
+                    "outer_fold": fold_idx,
+                    "train_groups": sorted(train_groups.astype(str).unique().tolist()),
+                    "test_groups": sorted(test_groups.astype(str).unique().tolist()),
+                    "train_rows": int(len(train_items)),
+                    "test_rows": int(len(test_items)),
+                    "selected_feature_count": len(selected_features),
+                    "selected_features": selected_features,
+                    "best_params": _to_serializable_params(best_params),
+                }
+            )
+
+        print("\n--- Final Performance Report ---")
+        print(f"Accuracies for each fold: {np.round(fold_accuracies, 3)}")
+        print(f"Precisions for each fold: {np.round(fold_precisions, 3)}")
+        print(f"Recalls for each fold: {np.round(fold_recalls, 3)}")
+        print(f"F1-Scores for each fold: {np.round(fold_f1_scores, 3)}")
+        print("\n--- Mean and Standard Deviation ---")
+        print(f"Mean Accuracy: {np.mean(fold_accuracies):.3f} (+/- {np.std(fold_accuracies):.3f})")
+        print(f"Mean Precision: {np.mean(fold_precisions):.3f} (+/- {np.std(fold_precisions):.3f})")
+        print(f"Mean Recall: {np.mean(fold_recalls):.3f} (+/- {np.std(fold_recalls):.3f})")
+        print(f"Mean F1-Score: {np.mean(fold_f1_scores):.3f} (+/- {np.std(fold_f1_scores):.3f})")
+        print("\n--- Overall Classification Report ---")
+        print(classification_report(all_y_true, all_y_pred, zero_division=0))
+        print("\n--- Overall Confusion Matrix ---")
+        cm = confusion_matrix(all_y_true, all_y_pred, labels=np.unique(all_y_true))
+        cm_df = pd.DataFrame(cm, index=np.unique(all_y_true), columns=np.unique(all_y_true))
+        print(cm_df)
+        cm_df.to_csv(output_dir / "confusion_matrix.csv")
+
+        with open(output_dir / "best_params.json", "w", encoding="utf-8") as handle:
+            json.dump({"outer_folds": fold_records}, handle, indent=2)
+        pd.DataFrame(
+            [
+                {
+                    "outer_fold": record["outer_fold"],
+                    "train_groups": ",".join(record["train_groups"]),
+                    "test_groups": ",".join(record["test_groups"]),
+                    "train_rows": record["train_rows"],
+                    "test_rows": record["test_rows"],
+                    "selected_feature_count": record["selected_feature_count"],
+                    "selected_features": "|".join(record["selected_features"]),
+                }
+                for record in fold_records
+            ]
+        ).to_csv(output_dir / "selected_features_by_fold.csv", index=False)
+
+        if mlp_mode == "nested_cv":
+            selected_features_full = _select_features(
+                nmf_props,
+                enrichment_frame,
+                niche_gene_frame,
+                y,
+                top_enrichment=top_enrichment,
+                top_niche_gene=top_niche_gene,
+            )
+            X_explain = X_full[selected_features_full]
+            _final_model, final_params_for_explain, _score = _search_best_params(X_explain, y, groups)
+            _save_fixed_params(mlp_best_params_out, final_params_for_explain, selection_score=_score)
+        else:
+            final_params_for_explain = fixed_params
+
+    if not skip_shap and mlp_mode in {"nested_cv", "evaluate_fixed", "explain"}:
         print("\n--- Explanatory Full-Data Model (not part of unbiased evaluation) ---")
         selected_features_full = _select_features(
             nmf_props,
@@ -602,9 +723,23 @@ try:
             top_niche_gene=top_niche_gene,
         )
         X_explain = X_full[selected_features_full]
-        final_model, final_params = _fit_inner_model(X_explain, y, groups)
+        if mlp_mode == "explain":
+            if not mlp_fixed_params_path.exists():
+                raise FileNotFoundError(f"Fixed params file not found: {mlp_fixed_params_path}")
+            final_params_for_explain = _load_fixed_params(mlp_fixed_params_path)
+        if final_params_for_explain is None:
+            _final_model, final_params_for_explain, _score = _search_best_params(X_explain, y, groups)
+            _save_fixed_params(mlp_best_params_out, final_params_for_explain, selection_score=_score)
+        final_model = _build_model(
+            final_params_for_explain,
+            backend=mlp_backend,
+            device_name=mlp_device,
+            max_epochs=mlp_max_epochs,
+            patience=mlp_patience,
+            random_state=42,
+        )
         final_model.fit(X_explain, y)
-        print(f"Final explanatory params: {final_params}")
+        print(f"Final explanatory params: {_to_serializable_params(final_params_for_explain)}")
 
         class_labels = list(final_model.classes_)
         positive_class = "systemic_sclerosis" if "systemic_sclerosis" in class_labels else class_labels[-1]
@@ -648,6 +783,8 @@ try:
         plt.tight_layout()
         plt.savefig(output_dir / "shap_importance_top20.png", dpi=200, bbox_inches="tight")
         plt.close()
+    elif skip_shap:
+        print("\n--- SHAP skipped by configuration ---")
 
 finally:
     sys.stdout.close()

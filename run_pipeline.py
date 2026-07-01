@@ -949,10 +949,15 @@ def main():
         mlp_max_epochs = config.get("mlp_max_epochs")
         mlp_patience = config.get("mlp_patience")
         mlp_skip_shap = config.get("mlp_skip_shap")
+        mlp_mode = config.get("mlp_mode")
+        mlp_fixed_params_path = config.get("mlp_fixed_params_path")
+        mlp_best_params_out = config.get("mlp_best_params_out")
         if not mlp_output_subdir:
             mlp_output_subdir = "MLP_FOVFeatures" if mlp_feature_scope == "fov" else "MLP_44Features"
         mlp_output_dir = str(Path(output_dir) / mlp_output_subdir)
         mlp_env_parts = []
+        if mlp_mode is not None:
+            mlp_env_parts.append(f"NICHERUNNER_MLP_MODE={shell_quote(str(mlp_mode))}")
         if mlp_backend is not None:
             mlp_env_parts.append(f"NICHERUNNER_MLP_BACKEND={shell_quote(str(mlp_backend))}")
         if mlp_device is not None:
@@ -963,6 +968,10 @@ def main():
             mlp_env_parts.append(f"NICHERUNNER_MLP_PATIENCE={shell_quote(str(mlp_patience))}")
         if mlp_skip_shap is not None:
             mlp_env_parts.append(f"NICHERUNNER_SKIP_SHAP={shell_quote('1' if mlp_skip_shap else '0')}")
+        if mlp_fixed_params_path is not None:
+            mlp_env_parts.append(f"NICHERUNNER_MLP_FIXED_PARAMS_PATH={shell_quote(str(mlp_fixed_params_path))}")
+        if mlp_best_params_out is not None:
+            mlp_env_parts.append(f"NICHERUNNER_MLP_BEST_PARAMS_OUT={shell_quote(str(mlp_best_params_out))}")
         if mlp_feature_scope == "fov":
             builder_source = resolve_template(root, config.get("mlp_input_builder_script", DEFAULT_FOV_MLP_INPUT_BUILDER))
             if not builder_source.exists():
