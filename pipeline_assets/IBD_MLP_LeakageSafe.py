@@ -345,6 +345,35 @@ def _resolve_param_grid(profile: str) -> dict:
     }
 
 
+def _maybe_balance_training_data(X: pd.DataFrame, y: pd.Series):
+    if mlp_resampling == "none":
+        return X, y
+    if mlp_resampling != "oversample_minority":
+        raise ValueError(f"Unsupported MLP resampling strategy: {mlp_resampling}")
+
+    y_series = pd.Series(y).astype(str)
+    class_counts = y_series.value_counts()
+    if class_counts.empty or len(class_counts) < 2:
+        return X, y
+
+    max_count = int(class_counts.max())
+    rng = np.random.default_rng(42)
+    sampled_indices = []
+    for label, count in class_counts.items():
+        label_indices = y_series.index[y_series == label].to_numpy()
+        sampled_indices.extend(label_indices.tolist())
+        if count < max_count:
+            extra = rng.choice(label_indices, size=max_count - int(count), replace=True)
+            sampled_indices.extend(extra.tolist())
+
+    if isinstance(X.index, pd.Index):
+        balanced_X = X.loc[sampled_indices]
+    else:
+        balanced_X = X.iloc[sampled_indices]
+    balanced_y = y.loc[sampled_indices]
+    return balanced_X, balanced_y
+
+
 def _selection_score(y_true: pd.Series, y_pred: np.ndarray, labels: list[str]) -> float:
     if mlp_selection_metric == "weighted_f1":
         return float(f1_score(y_true, y_pred, labels=labels, average="weighted", zero_division=0))
@@ -421,6 +450,7 @@ def _fit_inner_model(X_train: pd.DataFrame, y_train: pd.Series, groups_train: pd
             y_inner_train = y_train.iloc[inner_train_idx]
             y_inner_test = y_train.iloc[inner_test_idx]
 
+            X_inner_train_fit, y_inner_train_fit = _maybe_balance_training_data(X_inner_train, y_inner_train)
             model = _build_model(
                 params,
                 backend=mlp_backend,
@@ -429,7 +459,7 @@ def _fit_inner_model(X_train: pd.DataFrame, y_train: pd.Series, groups_train: pd
                 patience=mlp_patience,
                 random_state=42,
             )
-            model.fit(X_inner_train, y_inner_train)
+            model.fit(X_inner_train_fit, y_inner_train_fit)
             y_pred = model.predict(X_inner_test)
             fold_scores.append(
                 _selection_score(y_inner_test, y_pred, all_labels)
@@ -466,6 +496,7 @@ def _save_fixed_params(path: Path, params: dict, *, selection_score: float | Non
         "selection_scope": selection_scope,
         "selection_metric": mlp_selection_metric,
         "grid_profile": mlp_grid_profile,
+        "resampling": mlp_resampling,
         "best_params": _to_serializable_params(params),
     }
     if selection_score is not None:
@@ -480,6 +511,9 @@ def _search_best_params(X_train: pd.DataFrame, y_train: pd.Series, groups_train:
     all_labels = sorted(y_train.unique())
     fold_scores = []
     for inner_train_idx, inner_test_idx in logo.split(X_train, y_train, groups_train.to_numpy()):
+        X_inner_train = X_train.iloc[inner_train_idx]
+        y_inner_train = y_train.iloc[inner_train_idx]
+        X_inner_train_fit, y_inner_train_fit = _maybe_balance_training_data(X_inner_train, y_inner_train)
         search_model = _build_model(
             params,
             backend=mlp_backend,
@@ -488,7 +522,7 @@ def _search_best_params(X_train: pd.DataFrame, y_train: pd.Series, groups_train:
             patience=mlp_patience,
             random_state=42,
         )
-        search_model.fit(X_train.iloc[inner_train_idx], y_train.iloc[inner_train_idx])
+        search_model.fit(X_inner_train_fit, y_inner_train_fit)
         y_pred = search_model.predict(X_train.iloc[inner_test_idx])
         fold_scores.append(
             _selection_score(y_train.iloc[inner_test_idx], y_pred, all_labels)
@@ -559,6 +593,7 @@ mlp_max_epochs = int(os.environ.get("NICHERUNNER_MLP_MAX_EPOCHS", "1000"))
 mlp_patience = int(os.environ.get("NICHERUNNER_MLP_PATIENCE", "20"))
 mlp_selection_metric = os.environ.get("NICHERUNNER_MLP_SELECTION_METRIC", "weighted_f1").strip().lower()
 mlp_grid_profile = os.environ.get("NICHERUNNER_MLP_GRID_PROFILE", "default").strip().lower()
+mlp_resampling = os.environ.get("NICHERUNNER_MLP_RESAMPLING", "none").strip().lower()
 mlp_mode = os.environ.get("NICHERUNNER_MLP_MODE", "nested_cv").strip().lower()
 mlp_fixed_params_path_env = os.environ.get("NICHERUNNER_MLP_FIXED_PARAMS_PATH", "").strip()
 mlp_best_params_out_env = os.environ.get("NICHERUNNER_MLP_BEST_PARAMS_OUT", "").strip()
@@ -571,6 +606,8 @@ if mlp_selection_metric not in {"weighted_f1", "macro_f1", "balanced_accuracy"}:
     raise ValueError("NICHERUNNER_MLP_SELECTION_METRIC must be one of: weighted_f1, macro_f1, balanced_accuracy.")
 if mlp_grid_profile not in {"default", "expanded"}:
     raise ValueError("NICHERUNNER_MLP_GRID_PROFILE must be either 'default' or 'expanded'.")
+if mlp_resampling not in {"none", "oversample_minority"}:
+    raise ValueError("NICHERUNNER_MLP_RESAMPLING must be either 'none' or 'oversample_minority'.")
 
 mlp_fixed_params_path = Path(mlp_fixed_params_path_env) if mlp_fixed_params_path_env else (output_dir / "fixed_params.json")
 mlp_best_params_out = Path(mlp_best_params_out_env) if mlp_best_params_out_env else (output_dir / "fixed_params.json")
@@ -589,6 +626,7 @@ try:
     print(f"MLP max epochs: {mlp_max_epochs}")
     print(f"MLP selection metric: {mlp_selection_metric}")
     print(f"MLP grid profile: {mlp_grid_profile}")
+    print(f"MLP resampling: {mlp_resampling}")
     print(f"MLP mode: {mlp_mode}")
     print(f"Fixed params path: {mlp_fixed_params_path}")
     print(f"Best params out: {mlp_best_params_out}")
@@ -685,7 +723,8 @@ try:
                     patience=mlp_patience,
                     random_state=42,
                 )
-            model.fit(X_train, y_train)
+            X_train_fit, y_train_fit = _maybe_balance_training_data(X_train, y_train)
+            model.fit(X_train_fit, y_train_fit)
             y_pred = model.predict(X_test)
 
             scores = _score_fold(y_test, y_pred, all_labels)
@@ -785,7 +824,8 @@ try:
             patience=mlp_patience,
             random_state=42,
         )
-        final_model.fit(X_explain, y)
+        X_explain_fit, y_explain_fit = _maybe_balance_training_data(X_explain, y)
+        final_model.fit(X_explain_fit, y_explain_fit)
         print(f"Final explanatory params: {_to_serializable_params(final_params_for_explain)}")
 
         class_labels = list(final_model.classes_)

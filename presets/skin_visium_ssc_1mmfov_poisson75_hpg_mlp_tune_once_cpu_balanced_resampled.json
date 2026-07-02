@@ -1,0 +1,36 @@
+{
+  "id": "skin_visium_ssc_1mmfov_poisson75_hpg_mlp_tune_once_cpu_balanced_resampled",
+  "label": "Skin Visium HC/SSc 1mm pseudo-FOV (MLP tune-once balanced resampled, HPG CPU)",
+  "organ": "skin",
+  "platform": "visium",
+  "run_name": "skin_visium_ssc_1mmfov_poisson75_mlp_tune_once_cpu_balanced_resampled",
+  "output_dir": "/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/skin_visium_ssc_1mmfov_poisson75_split/outputs",
+  "stages": [
+    "mlp"
+  ],
+  "mlp_script_path": "pipeline_assets/IBD_MLP_LeakageSafe.py",
+  "mlp_feature_scope": "fov",
+  "mlp_mode": "tune_once",
+  "mlp_backend": "sklearn",
+  "mlp_selection_metric": "macro_f1",
+  "mlp_grid_profile": "expanded",
+  "mlp_resampling": "oversample_minority",
+  "mlp_max_epochs": 1000,
+  "mlp_patience": 20,
+  "mlp_skip_shap": true,
+  "mlp_output_subdir": "MLP_FOVFeatures_tune_once_balanced_resampled",
+  "mlp_input_subdir": "MLP_FOVFeatures_inputs",
+  "mlp_best_params_out": "/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/skin_visium_ssc_1mmfov_poisson75_split/outputs/MLP_FOVFeatures_tune_once_balanced_resampled/fixed_params.json",
+  "slurm": {
+    "enabled": true,
+    "job_name": "skin_p75_t1r",
+    "account": "kejun.huang",
+    "time": "72:00:00",
+    "mem": "64gb",
+    "cpus_per_task": 8,
+    "qos": "kejun.huang-b",
+    "mail_user": "vasco.hinostroza@ufl.edu",
+    "mail_type": "ALL",
+    "conda_env": "/blue/kejun.huang/vasco.hinostroza/nicherunner/conda/envs/ibd_cosmx_k4"
+  }
+}

@@ -952,6 +952,7 @@ def main():
         mlp_mode = config.get("mlp_mode")
         mlp_selection_metric = config.get("mlp_selection_metric")
         mlp_grid_profile = config.get("mlp_grid_profile")
+        mlp_resampling = config.get("mlp_resampling")
         mlp_fixed_params_path = config.get("mlp_fixed_params_path")
         mlp_best_params_out = config.get("mlp_best_params_out")
         if not mlp_output_subdir:
@@ -964,6 +965,8 @@ def main():
             mlp_env_parts.append(f"NICHERUNNER_MLP_SELECTION_METRIC={shell_quote(str(mlp_selection_metric))}")
         if mlp_grid_profile is not None:
             mlp_env_parts.append(f"NICHERUNNER_MLP_GRID_PROFILE={shell_quote(str(mlp_grid_profile))}")
+        if mlp_resampling is not None:
+            mlp_env_parts.append(f"NICHERUNNER_MLP_RESAMPLING={shell_quote(str(mlp_resampling))}")
         if mlp_backend is not None:
             mlp_env_parts.append(f"NICHERUNNER_MLP_BACKEND={shell_quote(str(mlp_backend))}")
         if mlp_device is not None:
