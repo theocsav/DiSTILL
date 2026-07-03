@@ -594,6 +594,7 @@ mlp_patience = int(os.environ.get("NICHERUNNER_MLP_PATIENCE", "20"))
 mlp_selection_metric = os.environ.get("NICHERUNNER_MLP_SELECTION_METRIC", "weighted_f1").strip().lower()
 mlp_grid_profile = os.environ.get("NICHERUNNER_MLP_GRID_PROFILE", "default").strip().lower()
 mlp_resampling = os.environ.get("NICHERUNNER_MLP_RESAMPLING", "none").strip().lower()
+mlp_decision_threshold = float(os.environ.get("NICHERUNNER_MLP_DECISION_THRESHOLD", "0.5"))
 mlp_mode = os.environ.get("NICHERUNNER_MLP_MODE", "nested_cv").strip().lower()
 mlp_fixed_params_path_env = os.environ.get("NICHERUNNER_MLP_FIXED_PARAMS_PATH", "").strip()
 mlp_best_params_out_env = os.environ.get("NICHERUNNER_MLP_BEST_PARAMS_OUT", "").strip()
@@ -608,6 +609,8 @@ if mlp_grid_profile not in {"default", "expanded"}:
     raise ValueError("NICHERUNNER_MLP_GRID_PROFILE must be either 'default' or 'expanded'.")
 if mlp_resampling not in {"none", "oversample_minority"}:
     raise ValueError("NICHERUNNER_MLP_RESAMPLING must be either 'none' or 'oversample_minority'.")
+if not (0.0 < mlp_decision_threshold < 1.0):
+    raise ValueError("NICHERUNNER_MLP_DECISION_THRESHOLD must be between 0 and 1.")
 
 mlp_fixed_params_path = Path(mlp_fixed_params_path_env) if mlp_fixed_params_path_env else (output_dir / "fixed_params.json")
 mlp_best_params_out = Path(mlp_best_params_out_env) if mlp_best_params_out_env else (output_dir / "fixed_params.json")
@@ -627,6 +630,7 @@ try:
     print(f"MLP selection metric: {mlp_selection_metric}")
     print(f"MLP grid profile: {mlp_grid_profile}")
     print(f"MLP resampling: {mlp_resampling}")
+    print(f"MLP decision threshold: {mlp_decision_threshold}")
     print(f"MLP mode: {mlp_mode}")
     print(f"Fixed params path: {mlp_fixed_params_path}")
     print(f"Best params out: {mlp_best_params_out}")
@@ -654,6 +658,7 @@ try:
     fold_recalls = []
     fold_f1_scores = []
     fold_records = []
+    prediction_records = []
     all_labels = sorted(y.unique())
 
     unique_groups = list(pd.Index(groups.astype(str).unique()))
@@ -725,7 +730,18 @@ try:
                 )
             X_train_fit, y_train_fit = _maybe_balance_training_data(X_train, y_train)
             model.fit(X_train_fit, y_train_fit)
-            y_pred = model.predict(X_test)
+            class_labels = [str(label) for label in getattr(model, "classes_", all_labels)]
+            positive_class = "systemic_sclerosis" if "systemic_sclerosis" in class_labels else (class_labels[-1] if class_labels else None)
+            negative_class = None
+            positive_probs = None
+            if positive_class is not None and len(class_labels) == 2 and hasattr(model, "predict_proba"):
+                probs = model.predict_proba(X_test)
+                positive_idx = class_labels.index(positive_class)
+                positive_probs = probs[:, positive_idx]
+                negative_class = class_labels[0] if class_labels[1] == positive_class else class_labels[1]
+                y_pred = np.where(positive_probs >= mlp_decision_threshold, positive_class, negative_class)
+            else:
+                y_pred = model.predict(X_test)
 
             scores = _score_fold(y_test, y_pred, all_labels)
             fold_accuracies.append(scores["accuracy"])
@@ -747,6 +763,21 @@ try:
                     "best_params": _to_serializable_params(best_params),
                 }
             )
+            test_group_label = ",".join(sorted(test_groups.astype(str).unique().tolist()))
+            for idx_pos, item_id in enumerate(test_items):
+                record = {
+                    "outer_fold": fold_idx,
+                    "item_id": str(item_id),
+                    "test_group": test_group_label,
+                    "true_label": str(y_test.iloc[idx_pos]),
+                    "predicted_label": str(y_pred[idx_pos]),
+                    "decision_threshold": mlp_decision_threshold,
+                }
+                if positive_class is not None:
+                    record["positive_class"] = positive_class
+                if positive_probs is not None:
+                    record["positive_class_probability"] = float(positive_probs[idx_pos])
+                prediction_records.append(record)
 
         print("\n--- Final Performance Report ---")
         print(f"Accuracies for each fold: {np.round(fold_accuracies, 3)}")
@@ -782,6 +813,7 @@ try:
                 for record in fold_records
             ]
         ).to_csv(output_dir / "selected_features_by_fold.csv", index=False)
+        pd.DataFrame(prediction_records).to_csv(output_dir / "fold_predictions.csv", index=False)
 
         if mlp_mode == "nested_cv":
             selected_features_full = _select_features(
