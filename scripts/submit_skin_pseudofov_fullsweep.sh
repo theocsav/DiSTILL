@@ -4,6 +4,7 @@ set -euo pipefail
 REPO_DIR="/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool"
 DATA_DIR="/blue/kejun.huang/vasco.hinostroza/data/skin_dataset"
 PROCESSED_DIR="${DATA_DIR}/processed"
+SOURCE_H5AD="${PROCESSED_DIR}/skin_visium_ssc_1mmfov_spatial.h5ad"
 CONDA_ENV="/blue/kejun.huang/vasco.hinostroza/nicherunner/conda/envs/ibd_cosmx_k4"
 TILE_SIZES=(1000 750 500)
 
@@ -14,7 +15,7 @@ conda activate "${CONDA_ENV}"
 cd "${REPO_DIR}"
 
 python scripts/analyze_skin_pseudo_fov_sizes.py \
-  --h5ad "${PROCESSED_DIR}/skin_visium_ssc_1mmfov_spatial.h5ad" \
+  --h5ad "${SOURCE_H5AD}" \
   --output-dir "${PROCESSED_DIR}/pseudo_fov_sweep_analysis" \
   --tile-sizes-um "${TILE_SIZES[@]}" \
   --min-spots 20
@@ -27,8 +28,8 @@ for TILE in "${TILE_SIZES[@]}"; do
   DATASET_ID="skin_visium_ssc_${TILE}umfov"
 
   echo "=== Building ${DATASET_ID} ==="
-  python scripts/build_skin_visium_spatial_h5ad.py \
-    --input-dir "${DATA_DIR}" \
+  python scripts/retile_skin_visium_spatial_h5ad.py \
+    --source-h5ad "${SOURCE_H5AD}" \
     --output-dir "${PROCESSED_DIR}" \
     --dataset-id "${DATASET_ID}" \
     --pseudo-fov-tile-um "${TILE}"
@@ -66,4 +67,3 @@ echo
 echo "Monitor with:"
 echo "squeue -u \$USER"
 echo "sacct -j $(printf "%s,%s,%s," "${CELL2LOC_JOBS[@]}" "${NMF_JOBS[@]}" "${DOWNSTREAM_JOBS[@]}" | sed 's/,$//') --format=JobID,JobName%28,State,ExitCode,Elapsed"
-
