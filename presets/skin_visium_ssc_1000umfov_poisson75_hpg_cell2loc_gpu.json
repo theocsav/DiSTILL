@@ -1,0 +1,49 @@
+{
+  "id": "skin_visium_ssc_1000umfov_poisson75_hpg_cell2loc_gpu",
+  "label": "Skin Visium HC/SSc 1000um pseudo-FOV (cell2location only, HPG GPU)",
+  "organ": "skin",
+  "platform": "visium",
+  "run_name": "skin_visium_ssc_1000umfov_poisson75_fullsweep",
+  "mode": "poisson_cumulative_improvement_k",
+  "template_path": "pipeline_assets/scripts/IBD_3000epochs_systematicNMFapproach.py",
+  "reference_h5ad_path": "/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_reference.h5ad",
+  "cosmx_h5ad_path": "/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_visium_ssc_1000umfov_spatial.h5ad",
+  "cell_metadata_path": "/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_visium_ssc_1000umfov_metadata.csv",
+  "cell2loc_train_accelerator": "gpu",
+  "cell2loc_train_devices": 1,
+  "cell2loc_export_accelerator": "gpu",
+  "k_min": 2,
+  "k_max": 20,
+  "poisson_n_runs": 10,
+  "poisson_max_iter": 5000,
+  "poisson_normalize_rows_to_sum1": false,
+  "poisson_cumulative_improvement_target": 0.75,
+  "stages": ["cell2loc"],
+  "report_title": "NicheRunner Skin Visium HC/SSc Run (1000um pseudo-FOV, cell2location only, GPU)",
+  "preflight_slurm": {
+    "time": "0-00:10:00",
+    "mem": "8gb",
+    "cpus_per_task": 2
+  },
+  "default_resources": {
+    "time": "96:00:00",
+    "cpus_per_task": 8,
+    "mem": "96gb",
+    "qos": "kejun.huang",
+    "gres": "gpu:1"
+  },
+  "slurm": {
+    "enabled": true,
+    "job_name": "skin1000_c2l",
+    "account": "kejun.huang",
+    "time": "96:00:00",
+    "mem": "96gb",
+    "cpus_per_task": 8,
+    "qos": "kejun.huang",
+    "gres": "gpu:1",
+    "mail_user": "vasco.hinostroza@ufl.edu",
+    "mail_type": "ALL",
+    "modules": ["R"],
+    "conda_env": "/blue/kejun.huang/vasco.hinostroza/nicherunner/conda/envs/ibd_cosmx_k4"
+  }
+}

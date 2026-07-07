@@ -10,6 +10,7 @@ venv/
 node_modules/
 .next/
 out/
+*.tsbuildinfo
 
 # Env
 .env
@@ -33,14 +34,16 @@ runs.db
 .DS_Store
 Thumbs.db
 
-# test
+# Test and local datasets
 test_files/
 bolen_clon/
-docs/
+docs/*
+!docs/SKIN_PSEUDOFOV_FULLSWEEP.md
 kidney_dataset/
 MLP_44Features_full
 skin_dataset/
 
+# Data archives and large local inputs
 41467_2025_60034_MOESM4_ESM.zip
 CosMX_data_share_2026_4_28-20260505T173840Z-3-001.zip
 GSE128033_RAW.tar
@@ -53,8 +56,23 @@ tmp_paper_text.txt
 top_20_genes_per_niche.csv
 top_30_genes_per_niche.csv
 top_50_genes_per_niche.csv
-
 commands_file.md
+
+# Local research outputs and manuscript work
+deliverables/
+cross_organ_comparison/
+skin_visium_manuscript_package/
+HANDOFF_*.md
+REVISION_LETTER.md
+*.aux
+*.fdb_latexmk
+*.fls
+*.synctex.gz
+*.toc
+post_comments.out
+app-*.pdf
+original_text.tex
+updated_text.tex
 
 !apps/web/pages/runs/
 !apps/web/pages/runs/[id].tsx
