@@ -1,0 +1,28 @@
+{
+  "id": "skin_visium_ssc_1000umfov_poisson75_hpg_post_nmf_cpu",
+  "label": "Skin Visium HC/SSc 1000um pseudo-FOV (post-NMF only, HPG CPU)",
+  "organ": "skin",
+  "platform": "visium",
+  "run_name": "skin_visium_ssc_1000umfov_poisson75_post_nmf_cpu",
+  "output_dir": "/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/skin_visium_ssc_1000umfov_poisson75_fullsweep/outputs",
+  "reference_h5ad_path": "/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_reference.h5ad",
+  "cosmx_h5ad_path": "/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_visium_ssc_1000umfov_spatial.h5ad",
+  "cell_metadata_path": "/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_visium_ssc_1000umfov_metadata.csv",
+  "stages": [
+    "post_nmf"
+  ],
+  "post_nmf_mode": "papermill",
+  "post_nmf_notebook_path": "pipeline_assets/IBD_Post_NMF_Analysis.ipynb",
+  "slurm": {
+    "enabled": true,
+    "job_name": "skin1000_pn",
+    "account": "kejun.huang",
+    "time": "24:00:00",
+    "mem": "64gb",
+    "cpus_per_task": 8,
+    "qos": "kejun.huang-b",
+    "mail_user": "vasco.hinostroza@ufl.edu",
+    "mail_type": "ALL",
+    "conda_env": "/blue/kejun.huang/vasco.hinostroza/nicherunner/conda/envs/ibd_cosmx_k4"
+  }
+}

@@ -22,7 +22,10 @@ python scripts/analyze_skin_pseudo_fov_sizes.py \
 
 declare -A CELL2LOC_JOBS
 declare -A NMF_JOBS
-declare -A DOWNSTREAM_JOBS
+declare -A POST_NMF_JOBS
+declare -A RCAUSAL_JOBS
+declare -A MLP_TUNE_JOBS
+declare -A MLP_EVAL_JOBS
 
 for TILE in "${TILE_SIZES[@]}"; do
   DATASET_ID="skin_visium_ssc_${TILE}umfov"
@@ -36,34 +39,50 @@ for TILE in "${TILE_SIZES[@]}"; do
 
   CELL2LOC_PRESET="presets/${DATASET_ID}_poisson75_hpg_cell2loc_gpu.json"
   NMF_PRESET="presets/${DATASET_ID}_poisson75_hpg_nmf_gpu.json"
-  DOWNSTREAM_PRESET="presets/${DATASET_ID}_poisson75_hpg_downstream_cpu.json"
+  POST_NMF_PRESET="presets/${DATASET_ID}_poisson75_hpg_post_nmf_cpu.json"
+  RCAUSAL_PRESET="presets/${DATASET_ID}_poisson75_hpg_rcausal_cpu.json"
+  MLP_TUNE_PRESET="presets/${DATASET_ID}_poisson75_hpg_mlp_tune_once_cpu.json"
+  MLP_EVAL_PRESET="presets/${DATASET_ID}_poisson75_hpg_mlp_eval_fixed_cpu.json"
 
   python run_pipeline.py --config "${CELL2LOC_PRESET}" --validate
   python run_pipeline.py --config "${NMF_PRESET}" --validate
-  python run_pipeline.py --config "${DOWNSTREAM_PRESET}" --validate
+  python run_pipeline.py --config "${POST_NMF_PRESET}" --validate
+  python run_pipeline.py --config "${RCAUSAL_PRESET}" --validate
+  python run_pipeline.py --config "${MLP_TUNE_PRESET}" --validate
+  python run_pipeline.py --config "${MLP_EVAL_PRESET}" --validate
 
   python run_pipeline.py --config "${CELL2LOC_PRESET}"
   python run_pipeline.py --config "${NMF_PRESET}"
-  python run_pipeline.py --config "${DOWNSTREAM_PRESET}"
+  python run_pipeline.py --config "${POST_NMF_PRESET}"
+  python run_pipeline.py --config "${RCAUSAL_PRESET}"
+  python run_pipeline.py --config "${MLP_TUNE_PRESET}"
+  python run_pipeline.py --config "${MLP_EVAL_PRESET}"
 
   CELL2LOC_RUN_DIR="runs/${DATASET_ID}_poisson75_fullsweep"
   NMF_RUN_DIR="runs/${DATASET_ID}_poisson75_fullsweep_nmf_gpu"
-  DOWNSTREAM_RUN_DIR="runs/${DATASET_ID}_poisson75_fullsweep_downstream_cpu"
+  POST_NMF_RUN_DIR="runs/${DATASET_ID}_poisson75_post_nmf_cpu"
+  RCAUSAL_RUN_DIR="runs/${DATASET_ID}_poisson75_rcausal_cpu"
+  MLP_TUNE_RUN_DIR="runs/${DATASET_ID}_poisson75_mlp_tune_once_cpu"
+  MLP_EVAL_RUN_DIR="runs/${DATASET_ID}_poisson75_mlp_eval_fixed_cpu"
 
   CELL2LOC_JOBS["${TILE}"]=$(sbatch "${CELL2LOC_RUN_DIR}/submit.sh" | awk '{print $4}')
   NMF_JOBS["${TILE}"]=$(sbatch --dependency=afterok:${CELL2LOC_JOBS[${TILE}]} "${NMF_RUN_DIR}/submit.sh" | awk '{print $4}')
-  DOWNSTREAM_JOBS["${TILE}"]=$(sbatch --dependency=afterok:${NMF_JOBS[${TILE}]} "${DOWNSTREAM_RUN_DIR}/submit.sh" | awk '{print $4}')
+  POST_NMF_JOBS["${TILE}"]=$(sbatch --dependency=afterok:${NMF_JOBS[${TILE}]} "${POST_NMF_RUN_DIR}/submit.sh" | awk '{print $4}')
+  RCAUSAL_JOBS["${TILE}"]=$(sbatch --dependency=afterok:${POST_NMF_JOBS[${TILE}]} "${RCAUSAL_RUN_DIR}/submit.sh" | awk '{print $4}')
+  MLP_TUNE_JOBS["${TILE}"]=$(sbatch --dependency=afterok:${POST_NMF_JOBS[${TILE}]} "${MLP_TUNE_RUN_DIR}/submit.sh" | awk '{print $4}')
+  MLP_EVAL_JOBS["${TILE}"]=$(sbatch --dependency=afterok:${MLP_TUNE_JOBS[${TILE}]},afterok:${RCAUSAL_JOBS[${TILE}]} "${MLP_EVAL_RUN_DIR}/submit.sh" | awk '{print $4}')
 
-  echo "Queued ${DATASET_ID}: cell2loc=${CELL2LOC_JOBS[${TILE}]}, nmf=${NMF_JOBS[${TILE}]}, downstream=${DOWNSTREAM_JOBS[${TILE}]}"
+  echo "Queued ${DATASET_ID}: cell2loc=${CELL2LOC_JOBS[${TILE}]}, nmf=${NMF_JOBS[${TILE}]}, post_nmf=${POST_NMF_JOBS[${TILE}]}, rcausal=${RCAUSAL_JOBS[${TILE}]}, mlp_tune=${MLP_TUNE_JOBS[${TILE}]}, mlp_eval=${MLP_EVAL_JOBS[${TILE}]}"
 done
 
 echo
 echo "=== Sweep queued ==="
 for TILE in "${TILE_SIZES[@]}"; do
-  echo "${TILE}um: cell2loc=${CELL2LOC_JOBS[${TILE}]}, nmf=${NMF_JOBS[${TILE}]}, downstream=${DOWNSTREAM_JOBS[${TILE}]}"
+  echo "${TILE}um: cell2loc=${CELL2LOC_JOBS[${TILE}]}, nmf=${NMF_JOBS[${TILE}]}, post_nmf=${POST_NMF_JOBS[${TILE}]}, rcausal=${RCAUSAL_JOBS[${TILE}]}, mlp_tune=${MLP_TUNE_JOBS[${TILE}]}, mlp_eval=${MLP_EVAL_JOBS[${TILE}]}"
 done
 
 echo
 echo "Monitor with:"
-echo "squeue -u \$USER"
-echo "sacct -j $(printf "%s,%s,%s," "${CELL2LOC_JOBS[@]}" "${NMF_JOBS[@]}" "${DOWNSTREAM_JOBS[@]}" | sed 's/,$//') --format=JobID,JobName%28,State,ExitCode,Elapsed"
+echo "squeue -u \\$USER"
+JOB_LIST=$(printf "%s,%s,%s,%s,%s,%s," "${CELL2LOC_JOBS[@]}" "${NMF_JOBS[@]}" "${POST_NMF_JOBS[@]}" "${RCAUSAL_JOBS[@]}" "${MLP_TUNE_JOBS[@]}" "${MLP_EVAL_JOBS[@]}" | sed 's/,$//')
+echo "sacct -j ${JOB_LIST} --format=JobID,JobName%28,State,ExitCode,Elapsed"

@@ -21,11 +21,17 @@ The smaller MLP grid is intentional. It reduces runtime while preserving the cla
 
 ## Stage split
 
-Each tile size is submitted as a three-job dependency chain:
+Each tile size is now submitted as a six-job dependency chain:
 
 1. GPU `cell2loc`
 2. GPU `nmf`
-3. CPU `post_nmf + rcausal_mgm + mlp + report`
+3. CPU `post_nmf`
+4. CPU `rcausal_mgm`
+5. CPU `mlp_tune_once`
+6. CPU `mlp_evaluate_fixed + report`
+
+`rcausal_mgm` and `mlp_tune_once` both depend on `post_nmf`.
+The final evaluation job depends on both `rcausal_mgm` and `mlp_tune_once`.
 
 GPU jobs use regular QoS. CPU follow-up jobs use burst QoS.
 
@@ -35,7 +41,10 @@ For each tile size, the sweep uses:
 
 - `presets/skin_visium_ssc_<tile>umfov_poisson75_hpg_cell2loc_gpu.json`
 - `presets/skin_visium_ssc_<tile>umfov_poisson75_hpg_nmf_gpu.json`
-- `presets/skin_visium_ssc_<tile>umfov_poisson75_hpg_downstream_cpu.json`
+- `presets/skin_visium_ssc_<tile>umfov_poisson75_hpg_post_nmf_cpu.json`
+- `presets/skin_visium_ssc_<tile>umfov_poisson75_hpg_rcausal_cpu.json`
+- `presets/skin_visium_ssc_<tile>umfov_poisson75_hpg_mlp_tune_once_cpu.json`
+- `presets/skin_visium_ssc_<tile>umfov_poisson75_hpg_mlp_eval_fixed_cpu.json`
 
 where `<tile>` is `1000`, `750`, or `500`.
 
@@ -134,3 +143,37 @@ This setup matches the current research direction:
 - do not expand the hyperparameter search further
 - test the "more FOVs" hypothesis directly
 - preserve interpretability and report generation in the same run family
+## Timeout outcome
+
+All three downstream full-sweep jobs eventually hit the SLURM walltime limit and did not finish end-to-end.
+
+- downstream jobs used a uniform 96:00:00 time limit
+- each downstream preset ran the full chain: post_nmf + rcausal_mgm + mlp + report
+- the MLP portion was configured as leakage-safe grouped nested_cv, not a faster tune_once plus evaluate_fixed workflow
+
+Observed intermediate MLP input sizes:
+
+- 1000um: 225 FOV rows, 85 columns
+- 750um: 352 FOV rows, 85 columns
+- 500um: 664 FOV rows, 85 columns
+
+Interpretation:
+
+- the sweep succeeded at generating more pseudo-FOVs
+- but the current end-to-end downstream design is too expensive to complete within 96h for all three tile sizes
+- runtime pressure comes from the combination of grouped nested CV, resampling, and the full downstream bundle in one job
+
+Research takeaway:
+
+- the more-FOVs hypothesis is still testable
+- but the execution strategy should change before rerunning
+- the next iteration should separate feature generation from evaluation and use a cheaper evaluation protocol for the sweep itself
+
+Recommended rerun strategy:
+
+1. keep the pseudo-FOV generation and upstream cell2loc and nmf steps
+2. materialize downstream features once per tile size
+3. replace full nested_cv sweep runs with:
+   - one tune_once run per tile size
+   - one evaluate_fixed run per tile size
+4. reserve SHAP and heavier explainability only for the best-performing tile size
