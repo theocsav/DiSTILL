@@ -10,7 +10,9 @@ TILE_SIZES=(1000 750 500)
 
 module load conda
 source "$(conda info --base)/etc/profile.d/conda.sh"
+set +u
 conda activate "${CONDA_ENV}"
+set -u
 
 cd "${REPO_DIR}"
 

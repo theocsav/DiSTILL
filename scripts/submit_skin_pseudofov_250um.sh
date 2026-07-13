@@ -11,7 +11,9 @@ DATASET_ID="skin_visium_ssc_${TILE}umfov"
 
 module load conda
 source "$(conda info --base)/etc/profile.d/conda.sh"
+set +u
 conda activate "${CONDA_ENV}"
+set -u
 
 cd "${REPO_DIR}"
 
