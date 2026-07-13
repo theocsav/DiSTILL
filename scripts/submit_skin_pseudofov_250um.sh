@@ -8,6 +8,34 @@ SOURCE_H5AD="${PROCESSED_DIR}/skin_visium_ssc_1mmfov_spatial.h5ad"
 CONDA_ENV="/blue/kejun.huang/vasco.hinostroza/nicherunner/conda/envs/ibd_cosmx_k4"
 TILE=250
 DATASET_ID="skin_visium_ssc_${TILE}umfov"
+PREP_LOG_DIR="${REPO_DIR}/runs/pseudofov_prep_logs"
+PREP_SCRIPT="${PREP_LOG_DIR}/submit_skin_pseudofov_250um_prep.sh"
+
+mkdir -p "${PREP_LOG_DIR}"
+
+cat > "${PREP_SCRIPT}" <<'EOF'
+#!/usr/bin/env bash
+#SBATCH --job-name=skin250_prep
+#SBATCH --output=/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/pseudofov_prep_logs/skin250_prep.out
+#SBATCH --error=/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/pseudofov_prep_logs/skin250_prep.err
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --nodes=1
+#SBATCH --time=08:00:00
+#SBATCH --mem=32gb
+#SBATCH --account=kejun.huang
+#SBATCH --qos=kejun.huang-b
+#SBATCH --mail-user=vasco.hinostroza@ufl.edu
+#SBATCH --mail-type=ALL
+set -euo pipefail
+
+REPO_DIR="/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool"
+DATA_DIR="/blue/kejun.huang/vasco.hinostroza/data/skin_dataset"
+PROCESSED_DIR="${DATA_DIR}/processed"
+SOURCE_H5AD="${PROCESSED_DIR}/skin_visium_ssc_1mmfov_spatial.h5ad"
+CONDA_ENV="/blue/kejun.huang/vasco.hinostroza/nicherunner/conda/envs/ibd_cosmx_k4"
+TILE=250
+DATASET_ID="skin_visium_ssc_${TILE}umfov"
 
 module load conda
 source "$(conda info --base)/etc/profile.d/conda.sh"
@@ -60,3 +88,11 @@ echo "Queued ${DATASET_ID}: cell2loc=${C2L}, nmf=${NMF}, post_nmf=${PN}, rcausal
 echo "Monitor with:"
 echo "squeue -u \$USER"
 echo "sacct -j ${C2L},${NMF},${PN},${RC},${T1},${EV} --format=JobID,JobName%28,State,ExitCode,Elapsed"
+EOF
+
+chmod +x "${PREP_SCRIPT}"
+PREP_JOB=$(sbatch "${PREP_SCRIPT}" | awk '{print $4}')
+echo "Queued 250um pseudo-FOV prep job: ${PREP_JOB}"
+echo "Monitor prep with:"
+echo "squeue -j ${PREP_JOB}"
+echo "tail -n 200 ${PREP_LOG_DIR}/skin250_prep.out"
