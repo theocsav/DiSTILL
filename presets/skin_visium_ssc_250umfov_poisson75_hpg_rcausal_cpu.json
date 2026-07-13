@@ -1,0 +1,51 @@
+{
+  "id": "skin_visium_ssc_250umfov_poisson75_hpg_rcausal_cpu",
+  "label": "Skin Visium HC/SSc 250um pseudo-FOV (rCausalMGM only, HPG CPU)",
+  "organ": "skin",
+  "platform": "visium",
+  "run_name": "skin_visium_ssc_250umfov_poisson75_rcausal_cpu",
+  "output_dir": "/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/skin_visium_ssc_250umfov_poisson75_fullsweep/outputs",
+  "reference_h5ad_path": "/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_reference.h5ad",
+  "cosmx_h5ad_path": "/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_visium_ssc_250umfov_spatial.h5ad",
+  "cell_metadata_path": "/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_visium_ssc_250umfov_metadata.csv",
+  "stages": [
+    "rcausal_mgm"
+  ],
+  "rcausal_mode": "python",
+  "rcausal_script_path": "pipeline_assets/IBD_RCausalMGM_Preparation.py",
+  "rcausal_support_files": [
+    "pipeline_assets/rCausalMGM_Rscript_NeighborhoodInteractions.R",
+    "pipeline_assets/rCausalMGM_Rscript_NicheComposition.R",
+    "pipeline_assets/rCausalMGM_Rscript_NicheGeneFeatures.R"
+  ],
+  "rcausal_args": [
+    "--output-dir",
+    "/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/skin_visium_ssc_250umfov_poisson75_fullsweep/outputs/rcausal_mgm",
+    "--niche-h5ad",
+    "/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/skin_visium_ssc_250umfov_poisson75_fullsweep/outputs/cosmx_with_nmf.h5ad",
+    "--neighborhood-h5ad",
+    "/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/skin_visium_ssc_250umfov_poisson75_fullsweep/outputs/cosmx_with_nmf.h5ad",
+    "--run-r-scripts",
+    "--r-script-dir",
+    ".",
+    "--rscript-bin",
+    "Rscript",
+    "--r-num-boots",
+    "20"
+  ],
+  "slurm": {
+    "enabled": true,
+    "job_name": "skin250_rc",
+    "account": "kejun.huang",
+    "time": "24:00:00",
+    "mem": "64gb",
+    "cpus_per_task": 8,
+    "qos": "kejun.huang-b",
+    "mail_user": "vasco.hinostroza@ufl.edu",
+    "mail_type": "ALL",
+    "modules": [
+      "R"
+    ],
+    "conda_env": "/blue/kejun.huang/vasco.hinostroza/nicherunner/conda/envs/ibd_cosmx_k4"
+  }
+}

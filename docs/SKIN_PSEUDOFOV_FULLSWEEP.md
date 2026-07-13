@@ -177,3 +177,29 @@ Recommended rerun strategy:
    - one tune_once run per tile size
    - one evaluate_fixed run per tile size
 4. reserve SHAP and heavier explainability only for the best-performing tile size
+
+
+## 250um extension
+
+After the initial `1000um`, `750um`, and `500um` sweep completed, the next follow-up is a dedicated `250um` pseudo-FOV arm.
+
+Rationale:
+
+- `750um` and `500um` both outperformed `1000um`
+- `500um` gave the best mean fold F1 in the completed sweep
+- `250um` tests whether performance continues improving with even smaller pseudo-FOVs or whether the representation becomes too sparse
+
+Files added for the `250um` arm:
+
+- `presets/skin_visium_ssc_250umfov_poisson75_hpg_cell2loc_gpu.json`
+- `presets/skin_visium_ssc_250umfov_poisson75_hpg_nmf_gpu.json`
+- `presets/skin_visium_ssc_250umfov_poisson75_hpg_post_nmf_cpu.json`
+- `presets/skin_visium_ssc_250umfov_poisson75_hpg_rcausal_cpu.json`
+- `presets/skin_visium_ssc_250umfov_poisson75_hpg_mlp_tune_once_cpu.json`
+- `presets/skin_visium_ssc_250umfov_poisson75_hpg_mlp_eval_fixed_cpu.json`
+- `scripts/submit_skin_pseudofov_250um.sh`
+
+Recommended use:
+
+- run the `250um` arm independently instead of modifying the existing full-sweep script
+- compare `250um` directly against the completed `500um`, `750um`, and `1000um` runs using the same leakage-safe evaluation protocol
