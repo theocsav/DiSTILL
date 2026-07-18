@@ -992,10 +992,15 @@ def main():
             mlp_input_subdir = config.get("mlp_input_subdir", "MLP_FOVFeatures_inputs")
             mlp_input_dir = str(Path(output_dir) / mlp_input_subdir)
             niche_gene_count = int(config.get("mlp_niche_gene_count_per_group", 20))
+            mlp_cosmx_with_nmf_path = (
+                config.get("mlp_cosmx_with_nmf_path")
+                or config.get("cosmx_with_nmf_path")
+                or str(Path(output_dir) / "cosmx_with_nmf.h5ad")
+            )
             builder_cmd = (
                 f"python {shell_quote(builder_copy)} "
                 f"--output-dir {shell_quote(output_dir)} "
-                f"--cosmx-with-nmf {shell_quote(str(Path(output_dir) / 'cosmx_with_nmf.h5ad'))} "
+                f"--cosmx-with-nmf {shell_quote(mlp_cosmx_with_nmf_path)} "
                 f"--dest-dir {shell_quote(mlp_input_dir)} "
                 f"--niche-gene-count {niche_gene_count}"
             )

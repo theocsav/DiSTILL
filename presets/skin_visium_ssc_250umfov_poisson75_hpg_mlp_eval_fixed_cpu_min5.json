@@ -5,6 +5,7 @@
   "platform": "visium",
   "run_name": "skin_visium_ssc_250umfov_poisson75_mlp_eval_fixed_cpu_min5",
   "output_dir": "/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/skin_visium_ssc_250umfov_poisson75_fullsweep_min5/outputs",
+  "mlp_cosmx_with_nmf_path": "/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/skin_visium_ssc_250umfov_poisson75_fullsweep/outputs/cosmx_with_nmf.h5ad",
   "stages": [
     "mlp",
     "report"

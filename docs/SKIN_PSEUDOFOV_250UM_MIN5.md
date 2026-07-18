@@ -38,3 +38,11 @@ cells, and require at least 2 cells with finite coordinates and
 area-derived diameters for neighborhood enrichment. The rerun should verify
 that post_nmf_obs.csv contains multiple patient/FOV keys and non-null
 coordinates before classification begins.
+
+## Reused NMF artifact wiring
+
+The post-NMF stage uses the completed 250um NMF artifact from the original
+full-sweep output directory. The min5 MLP presets now set
+mlp_cosmx_with_nmf_path explicitly, and run_pipeline.py passes that path to
+the FOV input builder. This keeps the filtered min5 feature tables separate
+without copying the large NMF H5AD.
