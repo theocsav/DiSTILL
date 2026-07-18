@@ -17,3 +17,24 @@ bash scripts/submit_skin_pseudofov_250um_min5.sh
 
 The chain is `post_nmf -> mlp_tune_once -> mlp_eval_fixed/report`. It does not
 rerun cell2location or NMF.
+
+## Failure diagnosis and fix
+
+The first 250um min5 post-NMF jobs failed before classification. The retiled
+H5AD, NMF H5AD, and metadata CSV each contained 13,417 rows with matching
+unique_cell_id values and the expected spatial columns, so the source data
+were not the problem.
+
+The post-NMF metadata helper used a pandas merge on the cell key. That
+operation reset the left observation index to a RangeIndex; the subsequent
+reindex by the H5AD cell IDs therefore replaced patient, FOV, and coordinate
+metadata with NaN. This appeared as one unknown_patient_nan FOV with zero
+valid coordinates and caused neighborhood-enrichment construction to return
+no FOV-level rows.
+
+The fix preserves the observation index by joining metadata on _join_key.
+The scientific protocol is unchanged: retain FOVs with at least 5 total
+cells, and require at least 2 cells with finite coordinates and
+area-derived diameters for neighborhood enrichment. The rerun should verify
+that post_nmf_obs.csv contains multiple patient/FOV keys and non-null
+coordinates before classification begins.
