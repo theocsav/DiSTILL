@@ -304,6 +304,19 @@ def _to_serializable_params(params: dict) -> dict:
 
 
 def _resolve_param_grid(profile: str) -> dict:
+    if profile == "compact":
+        return {
+            "hidden_layer_sizes": [
+                (16,),
+                (32,),
+                (32, 16),
+                (32, 16, 8),
+            ],
+            "activation": ["relu", "tanh"],
+            "alpha": [1e-3, 1e-2],
+            "learning_rate_init": [1e-3, 1e-2],
+            "batch_size": [8, 16],
+        }
     if profile == "expanded":
         return {
             "hidden_layer_sizes": [
@@ -605,8 +618,8 @@ if mlp_mode not in {"nested_cv", "tune_once", "evaluate_fixed", "explain"}:
     raise ValueError("NICHERUNNER_MLP_MODE must be one of: nested_cv, tune_once, evaluate_fixed, explain.")
 if mlp_selection_metric not in {"weighted_f1", "macro_f1", "balanced_accuracy"}:
     raise ValueError("NICHERUNNER_MLP_SELECTION_METRIC must be one of: weighted_f1, macro_f1, balanced_accuracy.")
-if mlp_grid_profile not in {"default", "expanded"}:
-    raise ValueError("NICHERUNNER_MLP_GRID_PROFILE must be either 'default' or 'expanded'.")
+if mlp_grid_profile not in {"compact", "default", "expanded"}:
+    raise ValueError("NICHERUNNER_MLP_GRID_PROFILE must be one of: 'compact', 'default', 'expanded'.")
 if mlp_resampling not in {"none", "oversample_minority"}:
     raise ValueError("NICHERUNNER_MLP_RESAMPLING must be either 'none' or 'oversample_minority'.")
 if not (0.0 < mlp_decision_threshold < 1.0):

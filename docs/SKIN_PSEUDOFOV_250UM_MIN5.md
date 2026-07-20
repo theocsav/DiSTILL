@@ -46,3 +46,17 @@ full-sweep output directory. The min5 MLP presets now set
 mlp_cosmx_with_nmf_path explicitly, and run_pipeline.py passes that path to
 the FOV input builder. This keeps the filtered min5 feature tables separate
 without copying the large NMF H5AD.
+
+## Compact tuning profile
+
+The first min5 tuning attempt generated 2,201 FOV rows but timed out after
+48 hours because the default grid contains 2,160 parameter combinations.
+With 14 patient groups, that requires approximately 30,240 grouped MLP fits,
+each allowed up to 1,000 sklearn iterations.
+
+The exploratory rerun uses a compact, predeclared grid with 64 combinations
+and a 300-iteration cap. This changes the hyperparameter search budget, not
+the scientific evaluation protocol: patient-grouped leave-one-group-out
+evaluation, macro-F1 selection, minority oversampling, and the FOV unit are
+unchanged. Results from this 250um arm should therefore be labeled
+exploratory and compared primarily as a sensitivity analysis.
