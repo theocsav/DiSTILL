@@ -111,10 +111,10 @@ def _select_features(
 
 def _score_fold(y_true: pd.Series, y_pred: np.ndarray, labels: list[str]) -> dict:
     return {
-        "accuracy": balanced_accuracy_score(y_true, y_pred),
-        "precision": precision_score(y_true, y_pred, labels=labels, average="weighted", zero_division=0),
-        "recall": recall_score(y_true, y_pred, labels=labels, average="weighted", zero_division=0),
-        "f1": f1_score(y_true, y_pred, labels=labels, average="weighted", zero_division=0),
+        "balanced_accuracy": balanced_accuracy_score(y_true, y_pred),
+        "weighted_precision": precision_score(y_true, y_pred, labels=labels, average="weighted", zero_division=0),
+        "weighted_recall": recall_score(y_true, y_pred, labels=labels, average="weighted", zero_division=0),
+        "weighted_f1": f1_score(y_true, y_pred, labels=labels, average="weighted", zero_division=0),
         "macro_f1": f1_score(y_true, y_pred, labels=labels, average="macro", zero_division=0),
     }
 
@@ -666,10 +666,11 @@ try:
     logo = LeaveOneGroupOut()
     all_y_true = []
     all_y_pred = []
-    fold_accuracies = []
-    fold_precisions = []
-    fold_recalls = []
-    fold_f1_scores = []
+    fold_balanced_accuracies = []
+    fold_weighted_precisions = []
+    fold_weighted_recalls = []
+    fold_weighted_f1_scores = []
+    fold_macro_f1_scores = []
     fold_records = []
     prediction_records = []
     all_labels = sorted(y.unique())
@@ -757,10 +758,11 @@ try:
                 y_pred = model.predict(X_test)
 
             scores = _score_fold(y_test, y_pred, all_labels)
-            fold_accuracies.append(scores["accuracy"])
-            fold_precisions.append(scores["precision"])
-            fold_recalls.append(scores["recall"])
-            fold_f1_scores.append(scores["f1"])
+            fold_balanced_accuracies.append(scores["balanced_accuracy"])
+            fold_weighted_precisions.append(scores["weighted_precision"])
+            fold_weighted_recalls.append(scores["weighted_recall"])
+            fold_weighted_f1_scores.append(scores["weighted_f1"])
+            fold_macro_f1_scores.append(scores["macro_f1"])
             all_y_true.extend(y_test.tolist())
             all_y_pred.extend(y_pred.tolist())
 
@@ -793,15 +795,17 @@ try:
                 prediction_records.append(record)
 
         print("\n--- Final Performance Report ---")
-        print(f"Accuracies for each fold: {np.round(fold_accuracies, 3)}")
-        print(f"Precisions for each fold: {np.round(fold_precisions, 3)}")
-        print(f"Recalls for each fold: {np.round(fold_recalls, 3)}")
-        print(f"F1-Scores for each fold: {np.round(fold_f1_scores, 3)}")
+        print(f"Balanced Accuracies for each fold: {np.round(fold_balanced_accuracies, 3)}")
+        print(f"Weighted Precisions for each fold: {np.round(fold_weighted_precisions, 3)}")
+        print(f"Weighted Recalls for each fold: {np.round(fold_weighted_recalls, 3)}")
+        print(f"Weighted F1-Scores for each fold: {np.round(fold_weighted_f1_scores, 3)}")
+        print(f"Macro F1-Scores for each fold: {np.round(fold_macro_f1_scores, 3)}")
         print("\n--- Mean and Standard Deviation ---")
-        print(f"Mean Accuracy: {np.mean(fold_accuracies):.3f} (+/- {np.std(fold_accuracies):.3f})")
-        print(f"Mean Precision: {np.mean(fold_precisions):.3f} (+/- {np.std(fold_precisions):.3f})")
-        print(f"Mean Recall: {np.mean(fold_recalls):.3f} (+/- {np.std(fold_recalls):.3f})")
-        print(f"Mean F1-Score: {np.mean(fold_f1_scores):.3f} (+/- {np.std(fold_f1_scores):.3f})")
+        print(f"Mean Balanced Accuracy: {np.mean(fold_balanced_accuracies):.3f} (+/- {np.std(fold_balanced_accuracies):.3f})")
+        print(f"Mean Weighted Precision: {np.mean(fold_weighted_precisions):.3f} (+/- {np.std(fold_weighted_precisions):.3f})")
+        print(f"Mean Weighted Recall: {np.mean(fold_weighted_recalls):.3f} (+/- {np.std(fold_weighted_recalls):.3f})")
+        print(f"Mean Weighted F1-Score: {np.mean(fold_weighted_f1_scores):.3f} (+/- {np.std(fold_weighted_f1_scores):.3f})")
+        print(f"Mean Macro F1-Score: {np.mean(fold_macro_f1_scores):.3f} (+/- {np.std(fold_macro_f1_scores):.3f})")
         print("\n--- Overall Classification Report ---")
         print(classification_report(all_y_true, all_y_pred, zero_division=0))
         print("\n--- Overall Confusion Matrix ---")

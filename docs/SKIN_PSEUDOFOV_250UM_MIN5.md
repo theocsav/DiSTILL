@@ -60,3 +60,36 @@ the scientific evaluation protocol: patient-grouped leave-one-group-out
 evaluation, macro-F1 selection, minority oversampling, and the FOV unit are
 unchanged. Results from this 250um arm should therefore be labeled
 exploratory and compared primarily as a sensitivity analysis.
+
+## 250um min5 classification result
+
+Jobs 37656357 and 37656358 completed successfully on July 20, 2026. The
+input builder produced 2,201 FOV rows across 14 patient groups. The compact
+tuning selected:
+
+- hidden layers: 32, 16, 8
+- activation: relu
+- alpha: 0.01
+- learning rate: 0.001
+- batch size: 16
+- grouped full-data selection score: 0.405
+
+Aggregate held-out results:
+
+- accuracy: 0.38
+- balanced accuracy: approximately 0.36
+- macro-F1: 0.34
+- healthy F1: 0.16
+- systemic-sclerosis F1: 0.51
+
+Confusion matrix, rows true and columns predicted:
+
+- healthy: 132 correct, 843 called systemic sclerosis
+- systemic sclerosis: 715 correct, 511 called healthy
+
+The compact arm does not support the hypothesis that smaller FOVs improve
+classification. It is substantially weaker than the completed 500um and
+750um arms and should be reported as an exploratory negative sensitivity
+result. The legacy fold-summary lines in older mlp_results.txt files label
+balanced accuracy as Accuracy and weighted F1 as F1; the aggregate
+classification report is the primary metric summary for this result.
