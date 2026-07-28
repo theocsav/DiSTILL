@@ -228,6 +228,16 @@ def validate_cli_config(config, root, check_paths=True):
                 "pipeline_assets/IBD_MLP_LeakageSafe.py. See docs/MLP_EVALUATION_AND_LEAKAGE.md."
             )
 
+    # Causal rows are FOVs, but disease state is a patient-level attribute, so FOVs
+    # from one patient are not independent observations.
+    if "rcausal_mgm" in stages:
+        warnings.append(
+            "rcausal_mgm runs on FOV rows without adjusting for patient clustering, so "
+            "conditional independence tests on patient-level variables such as disease "
+            "state are anti-conservative. Treat FOV-level disease edges as exploratory. "
+            "See docs/PIPELINE_STAGE_REVIEW.md section 3.0."
+        )
+
     if str(config.get("status", "")).strip().lower() == "discontinued":
         reason = str(config.get("status_reason") or "").strip()
         warnings.append(

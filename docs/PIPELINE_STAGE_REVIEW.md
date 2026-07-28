@@ -19,6 +19,7 @@ Findings are ordered by how much they affect a reported result.
 | `nmf` reproducibility | **Caveat.** Two non-equivalent backends; see 2.1 |
 | `post_nmf` statistics | **Sound.** BH-FDR applied and enforced |
 | `post_nmf` -> MLP handoff | **Sound.** Unfiltered feature pool passed downstream |
+| `rcausal_mgm` sample independence | **Serious.** Pseudo-replication; see 3.0 |
 | `rcausal_mgm` reproducibility | **Fixed.** Seeds added; see 3.1 |
 | `rcausal_mgm` reported figure | **Open.** Renders the unstabilized graph; see 3.2 |
 | `validation.py` preflight | **Sound.** |
@@ -110,6 +111,56 @@ compute cost.
 
 ## 3. Causal discovery (`rcausal_mgm`)
 
+### 3.0 Pseudo-replication: FOVs treated as independent samples - open
+
+This is the most serious statistical issue found in the pipeline.
+
+`pipeline_assets/IBD_RCausalMGM_Preparation.py` builds the analysis table keyed by
+FOV:
+
+```python
+df["field_of_view"] = df["patient"].astype(str) + "_" + df["fov"].astype(str)
+```
+
+`patient` is used only to construct that key and is then dropped. The R scripts do
+`column_to_rownames("field_of_view")` and run `fciStable` over the resulting rows,
+with `field_of_view` explicitly excluded from the variable set. There is no patient
+or subject variable in the model and no adjustment for clustering.
+
+So for the skin cohort, FCI runs on **164 FOV rows as though they were 164
+independent observations, when the effective sample size is 14 patients**.
+
+This matters most for the disease edges. `Disease.Health.State` is a *patient-level*
+attribute: every FOV from one patient carries an identical label. The conditional
+independence tests backing any edge into disease state are therefore computed at
+roughly 12x the true sample size, which makes them strongly anti-conservative.
+Expect spurious edges and over-confident orientation.
+
+The inconsistency is the clearest signal that something is wrong. On the same data:
+
+- the MLP stage groups scrupulously by patient (`LeaveOneGroupOut`, no FOV spanning
+  folds)
+- the causal stage ignores patient structure entirely
+
+Both cannot be right about what constitutes an independent sample.
+
+**Not changed here.** The fix is a modelling decision with real tradeoffs at n = 14,
+and it should be made deliberately rather than by a code edit. The options:
+
+1. **Aggregate to patient level.** Statistically clean, but drops to n = 14
+   observations, which is likely too few for FCI orientation.
+2. **Keep FOV rows, add patient as a variable** so the graph can condition on it.
+   Retains resolution, but patient is a high-cardinality nuisance variable.
+3. **Use a clustered or permutation-based independence test** that respects patient
+   blocks. Most faithful, most work.
+4. **Report FOV-level graphs as exploratory only**, with disease edges qualified,
+   and treat patient-level aggregation as the confirmatory analysis.
+
+Option 4 is the cheapest honest position if the graphs are already in a draft.
+
+This is worth raising directly with whoever owns the causal methodology, since the
+choice depends on what the graphs are being used to claim.
+
 ### 3.1 No random seed - fixed
 
 `fciStable` and `bootstrap` are both stochastic, and none of the three R scripts
@@ -184,8 +235,10 @@ data and is a biological validation question rather than a code-correctness one.
 
 ## 5. Open items
 
-1. Decide whether causal figures should render from the bootstrap ensemble (3.2).
-2. Pin `nmf_device` explicitly for reported runs; record resolved device and dtype
+1. **Decide how to handle patient clustering in the causal stage (3.0).** Highest
+   priority: it affects every disease-linked edge.
+2. Decide whether causal figures should render from the bootstrap ensemble (3.2).
+3. Pin `nmf_device` explicitly for reported runs; record resolved device and dtype
    in run provenance (2.1).
-3. Disclose transductive NMF in methods (2.2).
-4. Raise `--num-boots` if stabilities will be reported (3.3).
+4. Disclose transductive NMF in methods (2.2).
+5. Raise `--num-boots` if stabilities will be reported (3.3).

@@ -1,0 +1,11 @@
+# Dependencies for the pipeline-level tests in tests/.
+#
+# Deliberately a small subset of what the full pipeline needs: the evaluation
+# tests exercise IBD_MLP_LeakageSafe.py in fov mode with SHAP skipped, which
+# needs neither cell2location/scvi nor shap/matplotlib.
+numpy
+pandas
+scikit-learn
+pyarrow
+anndata
+pytest

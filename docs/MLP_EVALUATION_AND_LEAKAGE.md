@@ -209,6 +209,34 @@ A leakage-safe result file begins:
 
 ---
 
+## 5a. Executable guard
+
+`tests/test_evaluation_leakage.py` encodes the invariant that this whole document
+rests on:
+
+> On data where the label is independent of every feature, an honest evaluation
+> must land at chance. Anything above chance is leakage.
+
+It contains:
+
+- `test_leakage_safe_evaluation_is_chance_on_null_data` - runs the real
+  `IBD_MLP_LeakageSafe.py` on a synthetic null cohort and asserts pooled accuracy
+  stays near chance. It measured 0.48 on 12 patients x 8 FOVs of pure noise.
+- `test_leakage_safe_evaluation_detects_real_signal` - positive control, so the
+  null test cannot pass merely because the evaluation is broken.
+- `test_nested_cv_is_chance_on_null_data` - same invariant through the full nested
+  path including inner tuning. Marked `slow`; run with `pytest tests -m slow`.
+- `test_search_then_report_on_same_folds_inflates_score` - reproduces the
+  discontinued pattern and asserts that reporting the search maximum exceeds the
+  median candidate on label-independent data, across five draws. This keeps the bug
+  class visible rather than only described.
+
+Run with `pytest tests`. Wired into CI as `.github/workflows/pipeline-tests.yml`.
+
+Note on why this matters: the discontinued script's defect would have been caught by
+the first test years earlier. A permuted-label run is the cheapest possible check on
+an evaluation pipeline, and it is now automatic.
+
 ## 6. Regenerating a citable result
 
 1. Choose a preset backed by `pipeline_assets/IBD_MLP_LeakageSafe.py`.

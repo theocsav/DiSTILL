@@ -9,10 +9,12 @@ from itertools import product
 from pathlib import Path
 
 import anndata as ad
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import shap
+
+# shap and matplotlib are imported lazily inside the SHAP block below. They are
+# only needed when NICHERUNNER_SKIP_SHAP=0, and importing them unconditionally
+# made a skip-SHAP evaluation depend on two heavy packages it never uses.
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.metrics import (
     balanced_accuracy_score,
@@ -848,6 +850,9 @@ try:
             final_params_for_explain = fixed_params
 
     if not skip_shap and mlp_mode in {"nested_cv", "evaluate_fixed", "explain"}:
+        import matplotlib.pyplot as plt
+        import shap
+
         print("\n--- Explanatory Full-Data Model (not part of unbiased evaluation) ---")
         selected_features_full = _select_features(
             nmf_props,
