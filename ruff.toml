@@ -1,0 +1,50 @@
+line-length = 120
+target-version = "py312"
+
+# Notebooks, vendored envs, and historical one-off analysis scripts are excluded:
+# they predate the app and are kept for reference, not maintained to lint clean.
+exclude = [
+    ".venv",
+    "apps/api/.venv",
+    "node_modules",
+    "pipeline_assets",
+    "examples",
+    "runs",
+    "bolen_clon",
+    "test_files",
+    "kidney_dataset",
+    "skin_dataset",
+    "cross_organ_comparison",
+    "deliverables",
+    "MLP_44Features_full",
+    "skin_visium_manuscript_package",
+]
+
+[lint]
+select = [
+    "F",    # pyflakes: undefined names, unused imports, f-string bugs
+    "E9",   # syntax / IO errors
+    "B",    # bugbear: mutable defaults, unused loop vars, except-in-finally
+    "T20",  # no print() in library code
+    "RET501", "RET502", "RET503",  # inconsistent/implicit returns
+    "PLE",  # pylint errors
+    "PLW0127", "PLW0129",          # self-assignment, assert-on-string
+]
+
+[lint.per-file-ignores]
+# scripts/ holds one-shot analysis helpers, several of which produced published
+# figures and tables. They are kept as-run for reproducibility, so lint here is
+# limited to real defects (F821 undefined names, syntax errors) rather than style:
+# rewriting them to satisfy a linter would risk silently changing published output.
+# T20  - they are CLI tools and are supposed to print
+# B905 - zip() lengths are structurally equal at every call site here
+# B007 - unused loop variables in groupby/enumerate idioms
+# B023 - loop-variable closures that are consumed inside the same iteration
+# F841 - dead locals, verified non-load-bearing (one is a read_csv kept as an
+#        implicit "this input must exist" check)
+"scripts/**/*.py" = ["T20", "B905", "B007", "B023", "F841"]
+"run_pipeline.py" = ["T20"]
+"apps/api/tests/**/*.py" = ["T20"]
+# Depends(), File(), Form() and Query() in argument defaults are the required
+# FastAPI idiom, not the mutable-default bug B008 exists to catch.
+"apps/api/app/**/*.py" = ["B008"]

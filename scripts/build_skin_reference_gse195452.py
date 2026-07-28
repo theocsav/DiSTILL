@@ -86,7 +86,7 @@ def build_reference_h5ad(
             print(f"[{i}/{len(members)}] processing {sample_code} ({member.name})")
             sample_meta = metadata[metadata["Cell_barcode"] == sample_code]
             if sample_meta.empty:
-                print(f"  skipped: no annotated metadata rows")
+                print("  skipped: no annotated metadata rows")
                 continue
 
             payload = tf.extractfile(member).read()
@@ -94,7 +94,7 @@ def build_reference_h5ad(
 
             matched_cells = [cell_id for cell_id in sample_meta.index if cell_id in counts.columns]
             if not matched_cells:
-                print(f"  skipped: no overlapping Well_ID columns")
+                print("  skipped: no overlapping Well_ID columns")
                 continue
 
             counts = counts.loc[:, matched_cells]

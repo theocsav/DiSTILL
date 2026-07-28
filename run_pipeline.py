@@ -5,7 +5,6 @@ import os
 import re
 import shlex
 import shutil
-import sys
 from pathlib import Path
 
 DEFAULT_FIXED_TEMPLATE = "pipeline_assets/scripts/IBD_3000epochs_500samples_NMF-k4.py"

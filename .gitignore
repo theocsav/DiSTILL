@@ -37,7 +37,19 @@ Thumbs.db
 # Test and local datasets
 test_files/
 bolen_clon/
-docs/*
+
+# Docs: keep the markdown, ignore LaTeX/build output and large embedded assets.
+docs/*.aux
+docs/*.bbl
+docs/*.blg
+docs/*.fdb_latexmk
+docs/*.fls
+docs/*.out
+docs/*.synctex.gz
+docs/*.toc
+docs/*.pdf
+docs/*.png
+docs/figures/
 !docs/SKIN_PSEUDOFOV_FULLSWEEP.md
 kidney_dataset/
 MLP_44Features_full
