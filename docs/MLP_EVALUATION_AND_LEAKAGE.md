@@ -250,6 +250,57 @@ an evaluation pipeline, and it is now automatic.
 
 ---
 
+## 6a. Re-evaluating the published IBD result
+
+The IBD numbers in `original_paper.tex` (Tan et al.) and reproduced as a case study
+in the DiSTILL manuscript - `0.774 +/- 0.161` three-class and `0.916 +/- 0.118`
+two-class - were produced by `IBD_MLP_44Features.py` with `cv_mode: sgkf3`. Both
+IBD presets point at that script, the `+/-` format is its per-fold output, and the
+three-class table reports HC at 1.000/1.000/1.000 on 55 samples.
+
+The cohort is **9 subjects, 171 FOVs**. Leakage bias shrinks as the number of
+independent units grows, and 9 is small, so this needs measuring rather than
+assuming. Two presets exist to settle it:
+
+| Preset | Task | Compares against |
+|---|---|---|
+| `ibd_cosmx_mlp_leakagesafe_threeclass` | HC / UC / CD | Tan et al. Table 1 |
+| `ibd_cosmx_mlp_leakagesafe_twoclass` | HC / IBD | Tan et al. Table 2 |
+
+Both:
+
+- run the `mlp` stage only, reusing the existing post-NMF artifacts in
+  `runs/ibd_cosmx_k4/output`, so cell2location and NMF are **not** recomputed and
+  the niches are identical to the published analysis
+- use `IBD_MLP_LeakageSafe.py` with `mlp_mode=nested_cv`, so hyperparameters are
+  selected strictly inside each training split
+- evaluate at `mlp_unit=fov` with leave-one-patient-out over the 9 subjects
+
+The two-class preset sets `mlp_label_map: "UC=IBD,CD=IBD"`, which collapses the
+target **after** feature construction. `tests/test_fov_mlp_input_builder.py`
+asserts that the features and patient groups are byte-identical between the two
+tasks, so the only difference is the label.
+
+Run:
+
+```bash
+python run_pipeline.py --config presets/ibd_cosmx_mlp_leakagesafe_threeclass.json --emit-sbatch
+sbatch runs/ibd_cosmx_mlp_leakagesafe_threeclass/submit.sh
+```
+
+Cost is modest: 9 outer folds x 8 inner folds x 64 configurations in the `compact`
+grid.
+
+Read the pooled `classification_report` from `mlp_results.txt`, not the per-fold
+mean +/- std above it (section 4.2). Compare against the majority-class baseline
+for each task.
+
+Interpretation is not predetermined. If the leakage-safe numbers land close to the
+published ones, the original result stands with an error bar that was estimated
+optimistically. If they collapse the way skin and kidney did, the conclusion is
+different. Either outcome is worth knowing before the DiSTILL revision is
+resubmitted.
+
 ## 7. Open items
 
 - Replace the per-fold mean +/- std figures in `docs/paper.tex` with pooled metrics.

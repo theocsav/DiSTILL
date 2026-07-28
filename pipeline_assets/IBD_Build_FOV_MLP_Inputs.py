@@ -64,7 +64,30 @@ def main() -> None:
     parser.add_argument("--cosmx-with-nmf", required=True, help="Path to cosmx_with_nmf.h5ad.")
     parser.add_argument("--dest-dir", required=True, help="Destination directory for MLP input parquet files.")
     parser.add_argument("--niche-gene-count", type=int, default=20, help="Top ranked niche-gene features to keep per group.")
+    parser.add_argument(
+        "--label-map",
+        default="",
+        help=(
+            "Optional comma-separated FROM=TO relabelling applied to disease_state, for "
+            "collapsing a multi-class target into a coarser one. Example: "
+            "'UC=IBD,CD=IBD' turns HC/UC/CD into HC/IBD. Labels not named are left "
+            "unchanged. Features and grouping are unaffected."
+        ),
+    )
     args = parser.parse_args()
+
+    label_map = {}
+    for pair in str(args.label_map).split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
+        if "=" not in pair:
+            raise SystemExit(f"--label-map entries must look like FROM=TO, got: {pair!r}")
+        source, target = pair.split("=", 1)
+        source, target = source.strip(), target.strip()
+        if not source or not target:
+            raise SystemExit(f"--label-map entries must have non-empty sides, got: {pair!r}")
+        label_map[source] = target
 
     output_dir = Path(args.output_dir)
     dest_dir = Path(args.dest_dir)
@@ -116,6 +139,18 @@ def main() -> None:
 
     fov_disease = obs.groupby("fov_key")["disease_state"].first().reindex(combined.index)
     fov_patient = obs.groupby("fov_key")["patient"].first().reindex(combined.index)
+
+    if label_map:
+        # Applied after aggregation so the collapse cannot affect feature construction.
+        unknown = sorted(set(label_map) - set(fov_disease.astype(str).unique()))
+        if unknown:
+            raise SystemExit(
+                f"--label-map refers to labels not present in disease_state: {unknown}. "
+                f"Present labels: {sorted(fov_disease.astype(str).unique())}"
+            )
+        before = sorted(fov_disease.astype(str).unique())
+        fov_disease = fov_disease.astype(str).map(lambda value: label_map.get(value, value))
+        print(f"Applied --label-map {label_map}: {before} -> {sorted(fov_disease.unique())}")
 
     combined.to_parquet(dest_dir / "combined_features_filtered.parquet")
     combined.to_csv(dest_dir / "combined_features_filtered.csv")

@@ -1046,6 +1046,12 @@ def main():
                 f"--dest-dir {shell_quote(mlp_input_dir)} "
                 f"--niche-gene-count {niche_gene_count}"
             )
+            # Collapses the target for coarser tasks, e.g. HC/UC/CD -> HC/IBD.
+            mlp_label_map = config.get("mlp_label_map")
+            if mlp_label_map:
+                if isinstance(mlp_label_map, dict):
+                    mlp_label_map = ",".join(f"{k}={v}" for k, v in mlp_label_map.items())
+                builder_cmd += f" --label-map {shell_quote(str(mlp_label_map))}"
             mlp_cmd = (
                 f"NICHERUNNER_OUTPUT_DIR={shell_quote(mlp_input_dir)} "
                 f"NICHERUNNER_SOURCE_OUTPUT_DIR={shell_quote(output_dir)} "

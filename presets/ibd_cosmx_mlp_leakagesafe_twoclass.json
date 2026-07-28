@@ -1,0 +1,38 @@
+{
+  "id": "ibd_cosmx_mlp_leakagesafe_twoclass",
+  "label": "IBD CosMx HC/IBD - leakage-safe nested CV (2-class)",
+  "organ": "colon",
+  "platform": "cosmx",
+  "run_name": "ibd_cosmx_mlp_leakagesafe_twoclass",
+  "notes": "Leakage-safe re-evaluation of the two-class IBD task (HC vs IBD) for direct comparison with Table 2 of Tan et al. UC and CD are collapsed to IBD after feature construction, so features and patient grouping are identical to the three-class preset. See docs/MLP_EVALUATION_AND_LEAKAGE.md.",
+  "output_dir": "/blue/kejun.huang/vasco.hinostroza/nicherunner/runs/ibd_cosmx_k4/output",
+  "cosmx_with_nmf_path": "/blue/kejun.huang/vasco.hinostroza/nicherunner/runs/ibd_cosmx_k4/output/cosmx_with_nmf.h5ad",
+  "stages": [
+    "mlp"
+  ],
+  "mlp_script_path": "pipeline_assets/IBD_MLP_LeakageSafe.py",
+  "mlp_feature_scope": "fov",
+  "mlp_mode": "nested_cv",
+  "mlp_selection_metric": "macro_f1",
+  "mlp_grid_profile": "compact",
+  "mlp_backend": "sklearn",
+  "mlp_max_epochs": 1000,
+  "mlp_patience": 20,
+  "mlp_skip_shap": true,
+  "mlp_input_subdir": "MLP_FOVFeatures_inputs_twoclass",
+  "mlp_output_subdir": "MLP_FOVFeatures_leakagesafe_twoclass",
+  "mlp_niche_gene_count_per_group": 20,
+  "slurm": {
+    "enabled": true,
+    "job_name": "ibd_ls_twoclass",
+    "account": "kejun.huang",
+    "time": "24:00:00",
+    "mem": "64gb",
+    "cpus_per_task": 8,
+    "qos": "kejun.huang-b",
+    "mail_user": "vasco.hinostroza@ufl.edu",
+    "mail_type": "ALL",
+    "conda_env": "/blue/kejun.huang/vasco.hinostroza/nicherunner/conda/envs/ibd_cosmx_k4"
+  },
+  "mlp_label_map": "UC=IBD,CD=IBD"
+}
