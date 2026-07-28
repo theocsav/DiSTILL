@@ -9,9 +9,9 @@
 # held-out performance estimate. RandomizedSearchCV searches the full dataset
 # using `cv_splitter`, and the "final cross-validation" below then re-uses that
 # same splitter, so the reported metrics come from the folds the hyperparameters
-# were chosen on. The optimistic bias is large: on the kidney cohort this script
-# reports 1.000 accuracy where the leakage-safe evaluation reports 0.33, and on
-# skin it reports 0.736 where the leakage-safe evaluation reports 0.58.
+# were chosen on. Measured on skin with identical features and groups in both arms,
+# the inflation is +0.206 weighted F1 under leave-one-patient-out and +0.155 under
+# sgkf3, the setting used for the published tables.
 #
 # Any mlp_results.txt produced by this script (identifiable by the header
 # "--- Starting Hyperparameter Search with RandomizedSearchCV ---") must not be

@@ -17,18 +17,45 @@ marked in place.
 
 Two MLP implementations exist and they disagree substantially on identical data.
 
-| Cohort | Discontinued `IBD_MLP_44Features.py` | Leakage-safe `IBD_MLP_LeakageSafe.py` |
-|---|---|---|
-| Kidney, n = 6 patients | **1.000** accuracy | **0.33** accuracy |
-| Skin, 164 FOVs / 14 patients | 0.736 acc, 0.698 weighted F1 | 0.58 acc, 0.51 macro F1 |
+**Measured on skin, 2026-07-28**, with the same features, targets and patient
+groups in both arms so that the evaluation protocol is the only variable
+(`scripts/compare_evaluation_protocols.py`, 164 FOVs / 14 patients / 85 features,
+24-candidate grid):
 
-The gap is measurement error, not a modelling improvement. The discontinued script
-reports a hyperparameter-selection maximum as though it were a held-out estimate.
+| Outer CV | Leaky reported | Honest pooled | Inflation |
+|---|---|---|---|
+| leave-one-patient-out | 0.840 | 0.634 | **+0.206** |
+| `sgkf3` (the published setting) | 0.686 | 0.531 | **+0.155** |
 
-**Honest current state: the FOV/patient disease classifier does not perform above
-baseline on either cohort.** On skin, 61 healthy vs 103 SSc means a
-majority-class predictor scores 0.628 accuracy; the model scores 0.58. Macro F1 of
-0.51 is chance. On kidney, n = 6 cannot support a classification claim at all.
+In both, the leaky arm's `Best F1-Score` and `Mean F1-Score` agree to three
+decimals, reproducing the signature visible in the manuscript output (0.6978 and
+0.698). They agree because they are the same computation.
+
+The published IBD three-class figure is 0.698 weighted F1 under `sgkf3`; skin's
+leaky `sgkf3` figure is 0.686. That parallel is suggestive, not evidence: different
+organ, different cohort.
+
+**Honest current state.** Under leave-one-patient-out on skin, the honest nested
+estimate reaches 0.608 balanced accuracy against a 0.5 chance line - weak but real
+discrimination (healthy recall 0.51, SSc recall 0.71). Under `sgkf3` it falls to
+0.499, i.e. chance, because each fold trains on roughly 9 patients instead of 13.
+Accuracy alone is misleading here: 0.634 against a 0.628 majority baseline looks
+like nothing, but on imbalanced classes balanced accuracy is the right comparison.
+
+**Correction, 2026-07-28.** An earlier version of this document reported kidney as
+1.000 accuracy under the discontinued script versus 0.33 under the leakage-safe
+one, and attributed that gap to leakage. That was wrong. Those two runs differed in
+feature construction as well as protocol, so the comparison was confounded. Running
+both protocols over the *same* kidney feature table returns **1.000 from both**.
+
+The kidney result is a sample-size artifact, not a leakage artifact, and it is
+quantifiable. With 6 samples split 3/3, a continuous feature perfectly separates the
+classes for exactly 2 of the C(6,3) = 20 possible label assignments, so P = 0.1 per
+feature. With 106 features, about **10 features separate the classes perfectly by
+chance alone**. Any classifier finds one. At that shape 1.000 is the expected result
+under the null. No evaluation protocol fixes it; only more subjects would.
+
+Kidney should therefore carry no classification number at all, in either direction.
 
 ---
 
