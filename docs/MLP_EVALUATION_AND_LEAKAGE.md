@@ -250,56 +250,66 @@ an evaluation pipeline, and it is now automatic.
 
 ---
 
-## 6a. Re-evaluating the published IBD result
+## 6a. The published IBD result cannot be re-evaluated here - BLOCKED
 
-The IBD numbers in `original_paper.tex` (Tan et al.) and reproduced as a case study
-in the DiSTILL manuscript - `0.774 +/- 0.161` three-class and `0.916 +/- 0.118`
-two-class - were produced by `IBD_MLP_44Features.py` with `cv_mode: sgkf3`. Both
-IBD presets point at that script, the `+/-` format is its per-fold output, and the
-three-class table reports HC at 1.000/1.000/1.000 on 55 samples.
+The IBD numbers in `original_paper.tex` and reproduced in the DiSTILL manuscript
+(`0.774 +/- 0.161` three-class, `0.916 +/- 0.118` two-class) were produced by
+`IBD_MLP_44Features.py` with `cv_mode: sgkf3`. Re-running them honestly is not
+possible from the UF HiPerGator filesystem, because the input artifacts are absent.
 
-The cohort is **9 subjects, 171 FOVs**. Leakage bias shrinks as the number of
-independent units grows, and 9 is small, so this needs measuring rather than
-assuming. Two presets exist to settle it:
+What was checked, 2026-07-28:
 
-| Preset | Task | Compares against |
-|---|---|---|
-| `ibd_cosmx_mlp_leakagesafe_threeclass` | HC / UC / CD | Tan et al. Table 1 |
-| `ibd_cosmx_mlp_leakagesafe_twoclass` | HC / IBD | Tan et al. Table 2 |
+- `runs/ibd_cosmx_k4/output` holds **9 rows x 14 features**, and the features are
+  cell morphology and QC summaries (`diameter_um_mean`, `Area_std`,
+  `CenterX_global_px_mean`, ...). The paper reports **171 FOVs x 44 niche
+  features** with support 55/62/54. Different unit, different count, different
+  features - this is not the published analysis.
+- `post_nmf_artifacts.json` lists only `reduced_features_final_15.parquet`,
+  `targets_y.parquet`, `groups.parquet`, `combined_features_filtered.parquet`.
+  No `enrichment_features_fov`, no `niche_gene_features_fov`.
+- The hardcoded fallback in `IBD_MLP_LeakageSafe.py`,
+  `/blue/kejun.huang/tan.m/IBDCosMx_scRNAseq/CosMx/Post-NMF_Analysis`, now contains
+  only an `RCausalMGM` subdirectory.
+- A filesystem-wide search for `combined_features_filtered.parquet` and
+  `enrichment_features_fov.*` returns skin and kidney runs only.
 
-Both:
+`presets/ibd_cosmx_mlp_leakagesafe_{threeclass,twoclass}.json` are therefore marked
+`"status": "blocked"`. They are correct in structure and ready to run if the
+original artifacts are recovered from the first author; only `output_dir` needs
+repointing.
 
-- run the `mlp` stage only, reusing the existing post-NMF artifacts in
-  `runs/ibd_cosmx_k4/output`, so cell2location and NMF are **not** recomputed and
-  the niches are identical to the published analysis
-- use `IBD_MLP_LeakageSafe.py` with `mlp_mode=nested_cv`, so hyperparameters are
-  selected strictly inside each training split
-- evaluate at `mlp_unit=fov` with leave-one-patient-out over the 9 subjects
+### This is a reproducibility finding in its own right
 
-The two-class preset sets `mlp_label_map: "UC=IBD,CD=IBD"`, which collapses the
-target **after** feature construction. `tests/test_fov_mlp_input_builder.py`
-asserts that the features and patient groups are byte-identical between the two
-tasks, so the only difference is the label.
+The published IBD analysis is not regenerable from any preset in this repository.
+For a manuscript whose central claim is reproducible orchestration, and which uses
+this IBD workflow as its case study, that gap is worth addressing directly - and it
+is independent of whether the numbers themselves are correct.
 
-Run:
+## 6b. The substitute experiment: measure the protocol delta where data exists
+
+`scripts/compare_evaluation_protocols.py` runs both protocols over the *same*
+feature matrix, targets, and patient groups, so the only variable is how
+hyperparameters are selected. Skin and kidney runs have complete artifacts, so the
+magnitude of the bias can be measured there.
 
 ```bash
-python run_pipeline.py --config presets/ibd_cosmx_mlp_leakagesafe_threeclass.json --emit-sbatch
-sbatch runs/ibd_cosmx_mlp_leakagesafe_threeclass/submit.sh
+RUN=/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/skin_visium_ssc_1mmfov_poisson75_split/outputs
+python scripts/compare_evaluation_protocols.py     --features $RUN/MLP_FOVFeatures_inputs/combined_features_filtered.parquet     --targets  $RUN/MLP_FOVFeatures_inputs/targets_y.parquet     --groups   $RUN/MLP_FOVFeatures_inputs/groups.parquet     --outdir   $RUN/ProtocolComparison     --outer-cv logo --grid compact --jobs 8
 ```
 
-Cost is modest: 9 outer folds x 8 inner folds x 64 configurations in the `compact`
-grid.
+It reports, side by side:
 
-Read the pooled `classification_report` from `mlp_results.txt`, not the per-fold
-mean +/- std above it (section 4.2). Compare against the majority-class baseline
-for each task.
+- the honest nested estimate, pooled
+- the leaky `Best F1-Score` and the leaky `Mean F1-Score`, which agree because they
+  are the same computation - this reproduces the signature visible in a
+  discontinued `mlp_results.txt`
+- the median candidate score, showing what is being maximised over
+- the majority-class baseline
 
-Interpretation is not predetermined. If the leakage-safe numbers land close to the
-published ones, the original result stands with an error bar that was estimated
-optimistically. If they collapse the way skin and kidney did, the conclusion is
-different. Either outcome is worth knowing before the DiSTILL revision is
-resubmitted.
+On a synthetic null cohort (48 rows, 8 patients, label independent of every
+feature) with only 24 candidates, it measures `Best F1-Score 0.581` and
+`Mean F1-Score 0.581` against an honest pooled `0.357`. The published run used
+30,000 candidates.
 
 ## 7. Open items
 

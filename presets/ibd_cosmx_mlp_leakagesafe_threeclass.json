@@ -1,6 +1,8 @@
 {
   "id": "ibd_cosmx_mlp_leakagesafe_threeclass",
   "label": "IBD CosMx HC/UC/CD - leakage-safe nested CV (3-class)",
+  "status": "blocked",
+  "status_reason": "BLOCKED: the IBD post-NMF artifacts this preset needs are not present on the UF HiPerGator filesystem. runs/ibd_cosmx_k4/output contains 9 patients x 14 morphology/QC features, not the 171 FOVs x 44 niche features behind Tables 1 and 2 of Tan et al. The hardcoded default in IBD_MLP_LeakageSafe.py points at /blue/kejun.huang/tan.m/IBDCosMx_scRNAseq/CosMx/Post-NMF_Analysis, which now holds only an RCausalMGM subdirectory. Running this preset as-is would evaluate the wrong feature matrix. Set output_dir to the real artifacts if they are recovered from the original author. See docs/MLP_EVALUATION_AND_LEAKAGE.md.",
   "organ": "colon",
   "platform": "cosmx",
   "run_name": "ibd_cosmx_mlp_leakagesafe_threeclass",
