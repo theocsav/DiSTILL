@@ -50,6 +50,10 @@ export type RunRerunPayload = {
 export type Preset = {
   id: string;
   label?: string;
+  /** "discontinued" marks a preset that must not be used for reported results. */
+  status?: string;
+  status_reason?: string;
+  superseded_by_script?: string;
   organ?: string;
   platform?: string;
   path?: string;

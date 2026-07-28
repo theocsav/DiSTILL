@@ -1,0 +1,231 @@
+# MLP Evaluation and Data Leakage
+
+Status: active
+Last reviewed: 2026-07-28
+
+This document records why one family of MLP scripts was discontinued, how large the
+resulting bias was, what the leakage-safe evaluation actually reports, and what the
+remaining caveats are. It is the reference for any classification number that leaves
+this repository.
+
+Nothing was deleted. Discontinued code and outputs are retained for provenance and
+marked in place.
+
+---
+
+## 1. Summary
+
+Two MLP implementations exist and they disagree substantially on identical data.
+
+| Cohort | Discontinued `IBD_MLP_44Features.py` | Leakage-safe `IBD_MLP_LeakageSafe.py` |
+|---|---|---|
+| Kidney, n = 6 patients | **1.000** accuracy | **0.33** accuracy |
+| Skin, 164 FOVs / 14 patients | 0.736 acc, 0.698 weighted F1 | 0.58 acc, 0.51 macro F1 |
+
+The gap is measurement error, not a modelling improvement. The discontinued script
+reports a hyperparameter-selection maximum as though it were a held-out estimate.
+
+**Honest current state: the FOV/patient disease classifier does not perform above
+baseline on either cohort.** On skin, 61 healthy vs 103 SSc means a
+majority-class predictor scores 0.628 accuracy; the model scores 0.58. Macro F1 of
+0.51 is chance. On kidney, n = 6 cannot support a classification claim at all.
+
+---
+
+## 2. The defect in the discontinued script
+
+`pipeline_assets/IBD_MLP_44Features.py`, lines ~117-147:
+
+```python
+random_search = RandomizedSearchCV(
+    estimator=pipe, param_distributions=param_distributions,
+    n_iter=30000, cv=cv_splitter, scoring='f1_weighted', ...
+)
+random_search.fit(X, y, groups=groups)        # searches the FULL dataset
+
+# ...
+
+for i, (train_idx, test_idx) in enumerate(split_iterator()):   # SAME cv_splitter
+    best_pipeline.fit(X_train, y_train)
+    y_pred = best_pipeline.predict(X_test)
+```
+
+`cv_splitter` is a single `StratifiedGroupKFold(n_splits=3, shuffle=True,
+random_state=42)` (or `LeaveOneGroupOut`) instance, so `split_iterator()` yields the
+identical folds the search already optimised over. The "final cross-validation" is a
+re-run of the winning configuration on the folds that selected it.
+
+With `n_iter=30000`, the reported score is the maximum over 30,000 configurations
+evaluated on those same folds. At the cohort sizes here that is largely fitting fold
+noise.
+
+### Direct evidence
+
+`skin_visium_manuscript_package/tables/mlp_results.txt`:
+
+```
+Best F1-Score: 0.6978          <- hyperparameter search
+Mean F1-Score: 0.698           <- "independent" evaluation
+```
+
+The same quantity computed twice. `MLP_44Features_full/mlp_results.txt` shows the
+pathology more starkly: 90,000 fits, `Best F1-Score: 0.7778`, per-fold accuracies
+`[1.0, 0.5, 1.0]`.
+
+### Scope
+
+Same pattern, all discontinued:
+
+- `pipeline_assets/IBD_MLP_44Features.py`
+- `pipeline_assets/scripts/IBD_MLP_44Features.py`
+- `pipeline_assets/scripts/IBD_MLP_51Features.py`
+- `pipeline_assets/scripts/IBD_MLP_FewerParams.py`
+
+---
+
+## 3. What the leakage-safe script gets right
+
+`pipeline_assets/IBD_MLP_LeakageSafe.py` was audited specifically for leakage. These
+are correct and should not be "simplified" away:
+
+- **Patient grouping.** `LeaveOneGroupOut` on patient for outer CV, and grouped
+  splits for inner tuning. No patient's FOVs span train and test.
+- **In-fold feature selection.** `_select_features` is called per outer fold on
+  `y_train.index` only (lines ~721-728). Mutual information never sees test labels.
+- **In-fold scaling.** `StandardScaler` is fit inside `model.fit()` (torch backend)
+  or inside the sklearn `Pipeline`. Never fit on the full matrix.
+- **Training-only resampling.** `_maybe_balance_training_data` is applied to the
+  training split only. Early stopping uses *training* loss with no internal
+  validation split, so oversampled duplicates cannot contaminate a validation set.
+- **No upstream leakage.** The post-NMF notebook computes FDR-filtered
+  `selected_enrichment_features`, but the tables handed to the MLP
+  (`enrichment_features_fov.parquet`, `niche_gene_features_fov.parquet`) are written
+  from the *unfiltered* column lists. The only thing taken from
+  `combined_features_filtered.parquet` is the `nmf_prop_*` columns, which are
+  unsupervised. The MLP therefore selects from the full candidate pool in-fold.
+- **Honest labelling.** The full-data SHAP model prints
+  `"not part of unbiased evaluation"`.
+
+Statistics elsewhere in the pipeline are also correct: the post-NMF notebook applies
+Benjamini-Hochberg via `multipletests(..., method="fdr_bh")` and filters at
+`p_adj < 0.05`.
+
+---
+
+## 4. Remaining caveats in the leakage-safe path
+
+### 4.1 `tune_once` -> `evaluate_fixed` carries selection bias
+
+The workflow documented in `docs/SKIN_KIDNEY_MLP_FINDINGS_2026-07-03.md` is:
+
+1. `tune_once` - one grouped hyperparameter search **across all patients**
+2. `evaluate_fixed` - LOGO evaluation reusing those parameters
+3. optional `explain`
+
+Step 1 sees every patient, including each one later held out in step 2. With the
+`expanded` grid (13 x 2 x 9 x 5 x 3 = **3,510 configurations**) that bias is not
+negligible.
+
+This exists for a real reason: full `nested_cv` is O(P^2 x |grid|) model fits, which
+was too slow for iteration. The tradeoff is legitimate for exploration and not
+legitimate for reporting.
+
+**Important:** this bias inflates results. The skin deliverable still lands at macro
+F1 0.51 *with* the bias present. The negative conclusion is therefore robust -
+removing the bias can only lower the numbers.
+
+Use `mlp_mode=nested_cv` for anything reported. `run_pipeline.py` now emits a
+validation warning when `mlp_mode=evaluate_fixed` is configured.
+
+### 4.2 Per-fold mean +/- std is misleading at patient level
+
+With `mlp_unit=patient` and `LeaveOneGroupOut`, each fold contains exactly one
+sample. `balanced_accuracy_score` on one sample is 0 or 1, so:
+
+- "Mean Balanced Accuracy" degenerates to plain accuracy, **not** balanced accuracy,
+  which is optimistic under class imbalance
+- the reported `+/-` is Bernoulli spread over single predictions, not fold-to-fold
+  variability of a metric
+
+The pooled `classification_report` over `all_y_true` / `all_y_pred` is the correct
+summary and is already produced. Prefer it. Figures in the style of
+`0.774 +/- 0.161` (see `docs/paper.tex` lines ~309-312) should be replaced with
+pooled metrics and an interval computed appropriately for the design.
+
+### 4.3 Cohort size
+
+Kidney at n = 6 patients cannot support a classifier claim regardless of methodology.
+Skin at 14 patients supports FOV-level evaluation only weakly, and patient-level
+evaluation not at all.
+
+---
+
+## 5. What was changed
+
+Code and configuration:
+
+- `run_pipeline.py`: `DEFAULT_MLP_SCRIPT` now points at `IBD_MLP_LeakageSafe.py`.
+  No preset relied on the previous default, so no existing run changes behaviour;
+  this prevents new presets from silently inheriting the discontinued script.
+- `run_pipeline.py`: validation warns on a discontinued MLP script, on a preset
+  marked `status: discontinued`, and on `mlp_mode=evaluate_fixed`.
+- The four discontinued scripts carry a `DISCONTINUED` header. The top-level one
+  also emits a `DeprecationWarning` and prints a banner at runtime. They remain
+  executable so historical runs stay reproducible.
+- Eight presets referencing the discontinued script are marked with
+  `"status": "discontinued"`, `"status_reason"`, and `"superseded_by_script"`.
+  They were **not** repointed, because silently swapping the script would change
+  what those presets mean.
+
+Outputs:
+
+- Every directory containing a leaked `mlp_results.txt` has a `DISCONTINUED.md`
+  marker. Files are retained, not deleted.
+
+Affected output directories:
+
+```
+kidney_dataset/loocv_report/MLP_44Features/
+kidney_dataset/new_report/MLP_44Features/
+kidney_dataset/patched_report/MLP_44Features/
+kidney_dataset/real_shap_report/MLP_44Features/
+kidney_dataset/report/MLP_44Features/
+kidney_dataset/shap_report/MLP_44Features/
+MLP_44Features_full/
+skin_visium_manuscript_package/tables/
+```
+
+A leaked result file is identifiable by its header:
+
+```
+--- Starting Hyperparameter Search with RandomizedSearchCV ---
+```
+
+A leakage-safe result file begins:
+
+```
+--- Starting Leakage-Safe Nested Grouped Evaluation ---
+```
+
+---
+
+## 6. Regenerating a citable result
+
+1. Choose a preset backed by `pipeline_assets/IBD_MLP_LeakageSafe.py`.
+2. Set `"mlp_mode": "nested_cv"`. Do not use `evaluate_fixed` for reported numbers.
+3. Consider `"mlp_grid_profile": "compact"` to keep the nested search tractable
+   (4 x 2 x 2 x 2 x 2 = 64 configurations rather than 3,510).
+4. Prefer `"mlp_unit": "fov"` over `patient` at current cohort sizes.
+5. Report the pooled classification report, not per-fold mean +/- std.
+6. Compare against the majority-class baseline explicitly. For skin FOV that
+   baseline is 0.628 accuracy.
+
+---
+
+## 7. Open items
+
+- Replace the per-fold mean +/- std figures in `docs/paper.tex` with pooled metrics.
+- Decide the fate of the numbers currently in `skin_visium_manuscript_package/`.
+  They are not citable as they stand.
+- The remaining stages (`cell2loc`, `nmf`, `post_nmf`, `rcausal_mgm`) and
+  `apps/api/app/validation.py` have not had an equivalent review.

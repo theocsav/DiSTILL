@@ -1,7 +1,38 @@
 # -*- coding: utf-8 -*-
-# Canonical stage implementation: supported through presets plus run_pipeline.py.
-# This file remains part of the pipeline contract, but it is not the app-level
-# job submission entrypoint by itself.
+# =============================================================================
+# DISCONTINUED - DO NOT USE FOR NEW EVALUATION OR FOR REPORTED RESULTS
+# =============================================================================
+# Superseded by: pipeline_assets/IBD_MLP_LeakageSafe.py
+# Rationale:     docs/MLP_EVALUATION_AND_LEAKAGE.md
+#
+# This script reports a hyperparameter-selection maximum as if it were a
+# held-out performance estimate. RandomizedSearchCV searches the full dataset
+# using `cv_splitter`, and the "final cross-validation" below then re-uses that
+# same splitter, so the reported metrics come from the folds the hyperparameters
+# were chosen on. The optimistic bias is large: on the kidney cohort this script
+# reports 1.000 accuracy where the leakage-safe evaluation reports 0.33, and on
+# skin it reports 0.736 where the leakage-safe evaluation reports 0.58.
+#
+# Any mlp_results.txt produced by this script (identifiable by the header
+# "--- Starting Hyperparameter Search with RandomizedSearchCV ---") must not be
+# cited. The affected output directories carry a DISCONTINUED.md marker.
+#
+# The file is retained unmodified below for provenance: it produced historical
+# results and removing it would break the ability to reproduce what was run.
+# It is intentionally still executable. Do not build on it.
+# =============================================================================
+import warnings as _deprecation_warnings
+
+_DISCONTINUED_NOTICE = (
+    "DISCONTINUED SCRIPT: IBD_MLP_44Features.py reports a hyperparameter-selection "
+    "maximum as a performance estimate (see docs/MLP_EVALUATION_AND_LEAKAGE.md). "
+    "Use pipeline_assets/IBD_MLP_LeakageSafe.py. Results from this script must not be cited."
+)
+_deprecation_warnings.warn(_DISCONTINUED_NOTICE, DeprecationWarning, stacklevel=2)
+print("=" * 79)
+print(_DISCONTINUED_NOTICE)
+print("=" * 79)
+
 import cell2location as c2l
 import matplotlib
 import matplotlib.pyplot as plt

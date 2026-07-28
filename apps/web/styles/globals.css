@@ -621,3 +621,23 @@ pre {
     width: fit-content;
   }
 }
+
+/* Shown when a discontinued preset is selected; see docs/MLP_EVALUATION_AND_LEAKAGE.md */
+.warning-note {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-left: 3px solid #b45309;
+  background: rgba(180, 83, 9, 0.08);
+  color: #92400e;
+  font-size: 13px;
+  line-height: 1.45;
+  border-radius: 4px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .warning-note {
+    border-left-color: #f59e0b;
+    background: rgba(245, 158, 11, 0.12);
+    color: #fcd34d;
+  }
+}

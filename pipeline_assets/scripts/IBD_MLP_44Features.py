@@ -1,4 +1,18 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# DISCONTINUED - DO NOT USE FOR NEW EVALUATION OR FOR REPORTED RESULTS
+# =============================================================================
+# Superseded by: pipeline_assets/IBD_MLP_LeakageSafe.py
+# Rationale:     docs/MLP_EVALUATION_AND_LEAKAGE.md
+#
+# This script selects hyperparameters with RandomizedSearchCV over the full
+# dataset and then reports a "final cross-validation" that re-uses the same
+# splitter, so the reported metrics come from the folds the hyperparameters were
+# chosen on. That is a selection maximum, not a held-out estimate.
+#
+# Retained unmodified below for provenance. Intentionally still executable.
+# Do not build on it, and do not cite results produced by it.
+# =============================================================================
 # Deprecated standalone launcher retained for reference. New runs should use
 # presets plus run_pipeline.py instead of calling this script directly.
 import cell2location as c2l

@@ -616,10 +616,18 @@ export default function Home() {
                   <option value="">Select a preset</option>
                   {presets.map((preset) => (
                     <option key={preset.id} value={preset.id}>
+                      {preset.status === "discontinued" ? "[DISCONTINUED] " : ""}
                       {preset.label || preset.id}
                     </option>
                   ))}
                 </select>
+                {selectedPreset?.status === "discontinued" ? (
+                  <p className="warning-note">
+                    <strong>Discontinued preset.</strong>{" "}
+                    {selectedPreset.status_reason ||
+                      "This preset should not be used for reported results."}
+                  </p>
+                ) : null}
               </div>
               <div>
                 <label>Run name</label>

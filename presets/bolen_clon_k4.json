@@ -1,6 +1,9 @@
 {
   "id": "bolen_clon_k4",
   "label": "Bolen CLON39 CosMx",
+  "status": "discontinued",
+  "status_reason": "Uses pipeline_assets/IBD_MLP_44Features.py, which reports a hyperparameter-selection maximum as a held-out estimate. Use a preset backed by IBD_MLP_LeakageSafe.py for any reported classification result. See docs/MLP_EVALUATION_AND_LEAKAGE.md.",
+  "superseded_by_script": "pipeline_assets/IBD_MLP_LeakageSafe.py",
   "organ": "colon",
   "platform": "cosmx",
   "run_name": "bolen_clon_k4",
@@ -12,7 +15,13 @@
   "ref_model_name": "cell2location_reference_model_k4",
   "inf_aver_name": "inf_aver_k4.csv",
   "n_components": 4,
-  "stages": ["cell2loc_nmf", "post_nmf", "rcausal_mgm", "mlp", "report"],
+  "stages": [
+    "cell2loc_nmf",
+    "post_nmf",
+    "rcausal_mgm",
+    "mlp",
+    "report"
+  ],
   "post_nmf_mode": "papermill",
   "post_nmf_notebook_path": "pipeline_assets/IBD_Post_NMF_Analysis.ipynb",
   "rcausal_mode": "python",

@@ -13,7 +13,19 @@ DEFAULT_POISSON_TEMPLATE = "pipeline_assets/scripts/IBD_3000epochs_systematicNMF
 DEFAULT_NMF_ONLY_SCRIPT = "pipeline_assets/scripts/IBD_Run_NMF_From_Cell2Loc.py"
 DEFAULT_POST_NMF_NOTEBOOK = "pipeline_assets/IBD_Post_NMF_Analysis.ipynb"
 DEFAULT_RCAUSAL_NOTEBOOK = "pipeline_assets/IBD_RCausalMGM_Preparation.ipynb"
-DEFAULT_MLP_SCRIPT = "pipeline_assets/IBD_MLP_44Features.py"
+# Default deliberately points at the leakage-safe script. The previous default
+# (IBD_MLP_44Features.py) is discontinued: it reports a hyperparameter-selection
+# maximum as a held-out estimate. No preset relied on the old default, so this
+# changes nothing that was already running; it stops new presets from silently
+# inheriting it. See docs/MLP_EVALUATION_AND_LEAKAGE.md.
+DEFAULT_MLP_SCRIPT = "pipeline_assets/IBD_MLP_LeakageSafe.py"
+DISCONTINUED_MLP_SCRIPTS = frozenset(
+    {
+        "IBD_MLP_44Features.py",
+        "IBD_MLP_51Features.py",
+        "IBD_MLP_FewerParams.py",
+    }
+)
 DEFAULT_FOV_MLP_INPUT_BUILDER = "pipeline_assets/IBD_Build_FOV_MLP_Inputs.py"
 DEFAULT_REPORT_TITLE = "NicheRunner Run Report"
 ALLOWED_STAGES = ("cell2loc_nmf", "cell2loc", "nmf", "post_nmf", "rcausal_mgm", "mlp", "report")
@@ -209,6 +221,27 @@ def validate_cli_config(config, root, check_paths=True):
         script_path = resolve_template(root, config.get("mlp_script_path", DEFAULT_MLP_SCRIPT))
         if check_paths and not script_path.exists():
             errors.append(f"MLP script not found: {script_path}")
+        if script_path.name in DISCONTINUED_MLP_SCRIPTS:
+            warnings.append(
+                f"DISCONTINUED MLP script: {script_path.name} reports a hyperparameter-selection "
+                "maximum as a held-out estimate. Results from it must not be cited. Use "
+                "pipeline_assets/IBD_MLP_LeakageSafe.py. See docs/MLP_EVALUATION_AND_LEAKAGE.md."
+            )
+
+    if str(config.get("status", "")).strip().lower() == "discontinued":
+        reason = str(config.get("status_reason") or "").strip()
+        warnings.append(
+            "DISCONTINUED preset." + (f" {reason}" if reason else "")
+        )
+
+    # tune_once selects hyperparameters across every group, so evaluate_fixed reusing
+    # those params reports numbers biased upward by that selection.
+    if "mlp" in stages and str(config.get("mlp_mode", "")).strip().lower() == "evaluate_fixed":
+        warnings.append(
+            "mlp_mode=evaluate_fixed reuses hyperparameters tuned on the full cohort by "
+            "tune_once, so reported metrics carry selection bias. Use mlp_mode=nested_cv "
+            "for any reported result. See docs/MLP_EVALUATION_AND_LEAKAGE.md."
+        )
 
     slurm = config.get("slurm", {})
     if slurm.get("enabled") and not slurm.get("conda_env"):

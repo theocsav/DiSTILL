@@ -1,6 +1,9 @@
 {
   "id": "ibd_cosmx_corrected_downstream",
   "label": "CosMx Corrected Downstream",
+  "status": "discontinued",
+  "status_reason": "Uses pipeline_assets/IBD_MLP_44Features.py, which reports a hyperparameter-selection maximum as a held-out estimate. Use a preset backed by IBD_MLP_LeakageSafe.py for any reported classification result. See docs/MLP_EVALUATION_AND_LEAKAGE.md.",
+  "superseded_by_script": "pipeline_assets/IBD_MLP_LeakageSafe.py",
   "organ": "colon",
   "platform": "cosmx",
   "run_name": "ibd_cosmx_corrected_downstream",
@@ -10,7 +13,12 @@
   "cosmx_h5ad_path": "/blue/kejun.huang/vasco.hinostroza/data/Corrected_CompleteCosMx.h5ad",
   "cosmx_with_nmf_path": "/blue/kejun.huang/vasco.hinostroza/data/Corrected_CompleteCosMx.h5ad",
   "output_dir": "/blue/kejun.huang/vasco.hinostroza/nicherunner/runs/ibd_cosmx_corrected_downstream/outputs",
-  "stages": ["post_nmf", "rcausal_mgm", "mlp", "report"],
+  "stages": [
+    "post_nmf",
+    "rcausal_mgm",
+    "mlp",
+    "report"
+  ],
   "post_nmf_mode": "papermill",
   "post_nmf_notebook_path": "pipeline_assets/IBD_Post_NMF_Analysis.ipynb",
   "rcausal_mode": "python",
