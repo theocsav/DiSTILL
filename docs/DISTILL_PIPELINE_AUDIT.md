@@ -65,6 +65,15 @@ Kidney:
 
 These are the current reference presets for HPG split execution.
 
+## Scientific review of the stages
+
+Stage-by-stage correctness review covering `cell2loc`, `nmf`, `post_nmf`,
+`rcausal_mgm`, and preflight validation:
+[PIPELINE_STAGE_REVIEW.md](PIPELINE_STAGE_REVIEW.md).
+
+MLP evaluation methodology and the discontinued scripts:
+[MLP_EVALUATION_AND_LEAKAGE.md](MLP_EVALUATION_AND_LEAKAGE.md).
+
 ## Discontinued: MLP scripts with evaluation leakage
 
 The following report a hyperparameter-selection maximum as a held-out estimate and

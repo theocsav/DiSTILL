@@ -5,7 +5,7 @@ suppressPackageStartupMessages({
 })
 
 parse_args <- function(args) {
-  out <- list(input_file = NULL, output_dir = NULL, num_boots = 20)
+  out <- list(input_file = NULL, output_dir = NULL, num_boots = 20, seed = 42)
   idx <- 1
   while (idx <= length(args)) {
     key <- args[[idx]]
@@ -13,6 +13,7 @@ parse_args <- function(args) {
     if (key == "--input-file") out$input_file <- val
     if (key == "--output-dir") out$output_dir <- val
     if (key == "--num-boots") out$num_boots <- as.integer(val)
+    if (key == "--seed") out$seed <- as.integer(val)
     idx <- idx + 2
   }
   out
@@ -35,7 +36,7 @@ ensure_targets <- function(df) {
   df
 }
 
-run_analysis <- function(data_frame, feature_vars, output_dir, prefix, num_boots) {
+run_analysis <- function(data_frame, feature_vars, output_dir, prefix, num_boots, seed = 42) {
   data_frame <- ensure_targets(data_frame)
   target_vars <- c("Disease.Health.State", setdiff(colnames(data_frame), c(feature_vars, "field_of_view", "Disease/Health State")))
   pdf(file.path(output_dir, paste0(prefix, "_Combined_Causal_Analysis.pdf")), width = 14, height = 14)
@@ -47,6 +48,9 @@ run_analysis <- function(data_frame, feature_vars, output_dir, prefix, num_boots
     if (!(target %in% colnames(subset_data)) || length(unique(subset_data[[target]])) <= 1) {
       next
     }
+    # fciStable and bootstrap are stochastic. Seed per target so a run is
+    # reproducible and so target order does not shift later targets' results.
+    set.seed(seed)
     fci_graph <- fciStable(data = subset_data, orientRule = "maxp", alpha = 0.05, verbose = TRUE)
     boot_results <- bootstrap(data = subset_data, graph = fci_graph, numBoots = num_boots, threads = -1L, verbose = TRUE)
     saveGraph(fci_graph, filename = file.path(output_dir, paste0(prefix, "_", target, "_a0_05_rCausalMGM.sif")))
@@ -66,4 +70,4 @@ dir.create(args$output_dir, recursive = TRUE, showWarnings = FALSE)
 niche_gene_data <- read.csv(args$input_file)
 niche_gene_data <- niche_gene_data %>% column_to_rownames("field_of_view")
 feature_vars <- setdiff(colnames(niche_gene_data), c("Disease/Health State", "Disease.Health.State"))
-run_analysis(niche_gene_data, feature_vars, args$output_dir, "NicheGene", args$num_boots)
+run_analysis(niche_gene_data, feature_vars, args$output_dir, "NicheGene", args$num_boots, args$seed)
