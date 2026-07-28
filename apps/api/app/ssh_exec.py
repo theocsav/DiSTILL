@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import Optional
 
 from .settings import (
+    SCP_TIMEOUT_SECONDS,
+    SLURM_COMMAND_TIMEOUT_SECONDS,
+    SSH_COMMAND_TIMEOUT_SECONDS,
     SSH_CONNECT_TIMEOUT_SECONDS,
     SSH_HOST,
     SSH_KEY_PATH,
@@ -62,19 +65,35 @@ def _scp_base_cmd() -> list[str]:
     return cmd
 
 
-def run_ssh_command(command: str, check: bool = False) -> subprocess.CompletedProcess[str]:
+def run_ssh_command(
+    command: str,
+    check: bool = False,
+    timeout: Optional[float] = None,
+) -> subprocess.CompletedProcess[str]:
     cmd = _ssh_base_cmd() + [command]
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, check=check)
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=check,
+            timeout=timeout if timeout is not None else SSH_COMMAND_TIMEOUT_SECONDS,
+        )
     except FileNotFoundError as exc:
         raise RuntimeError("ssh client binary not found in API runtime.") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"ssh command timed out after {exc.timeout}s: {command}") from exc
 
 
-def run_command(args: list[str]) -> subprocess.CompletedProcess[str]:
+def run_command(args: list[str], timeout: Optional[float] = None) -> subprocess.CompletedProcess[str]:
+    effective_timeout = timeout if timeout is not None else SLURM_COMMAND_TIMEOUT_SECONDS
     if is_ssh_backend():
         remote_cmd = " ".join(shlex.quote(item) for item in args)
-        return run_ssh_command(remote_cmd)
-    return subprocess.run(args, capture_output=True, text=True)
+        return run_ssh_command(remote_cmd, timeout=effective_timeout)
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=effective_timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"Command timed out after {exc.timeout}s: {args[0]}") from exc
 
 
 def remote_path_exists(path: str) -> Optional[bool]:
@@ -107,6 +126,8 @@ def scp_upload(local_path: str, remote_dir: str) -> subprocess.CompletedProcess[
     remote_target = f"{SSH_USER}@{SSH_HOST}:{remote_dir}"
     cmd = _scp_base_cmd() + [local_path, remote_target]
     try:
-        return subprocess.run(cmd, capture_output=True, text=True)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=SCP_TIMEOUT_SECONDS)
     except FileNotFoundError as exc:
         raise RuntimeError("scp client binary not found in API runtime.") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"scp upload timed out after {exc.timeout}s.") from exc

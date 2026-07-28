@@ -84,6 +84,31 @@ def _file_extensions(file_name: str) -> list[str]:
     return suffixes[-2:] + suffixes[-1:]
 
 
+def max_size_for_role(file_role: str) -> int:
+    if file_role not in ROLE_MAX_SIZE_BYTES:
+        raise ValueError("Invalid file_role.")
+    return ROLE_MAX_SIZE_BYTES[file_role]
+
+
+def validate_role_file_name(file_role: str, file_name: str) -> str:
+    """Sanitize a filename and enforce the per-role extension allowlist.
+
+    Shared with the legacy multipart upload endpoint so both intake paths apply the
+    same rules.
+    """
+    if file_role not in ALLOWED_FILE_ROLES:
+        raise ValueError("Invalid file_role.")
+    safe_name = _sanitize_file_name(file_name)
+    allowed_exts = ROLE_ALLOWED_EXTS[file_role]
+    if allowed_exts:
+        exts = {ext.lower() for ext in _file_extensions(safe_name)}
+        if not (exts & allowed_exts):
+            raise ValueError(
+                f"File extension not allowed for role '{file_role}'. Allowed: {', '.join(sorted(allowed_exts))}"
+            )
+    return safe_name
+
+
 def _active_sessions_for_user(username: str) -> int:
     count = 0
     for session_file in _sessions_dir().glob("*.json"):
@@ -225,13 +250,14 @@ def append_chunk(upload_id: str, username: str, offset: int, data: bytes) -> Dic
     current = temp_path.stat().st_size if temp_path.exists() else 0
     if offset != current:
         raise ValueError(f"Offset mismatch. expected={current} provided={offset}")
+    # Check the declared total before writing; otherwise the overflow lands on disk anyway.
+    if current + len(data) > int(manifest["total_size"]):
+        raise ValueError("Received bytes exceed declared total size.")
     if data:
         with temp_path.open("ab") as handle:
             handle.write(data)
     manifest["received_bytes"] = current + len(data)
     manifest["updated_at"] = _utc_now()
-    if int(manifest["received_bytes"]) > int(manifest["total_size"]):
-        raise ValueError("Received bytes exceed declared total size.")
     return _to_response(_save(manifest))
 
 
@@ -247,9 +273,6 @@ def complete_upload(upload_id: str, username: str) -> Dict[str, Any]:
     enforce_allowed_path(final_path, ARTIFACT_ROOTS)
     if not temp_path.exists():
         raise ValueError("Upload temp file not found.")
-    final_path.parent.mkdir(parents=True, exist_ok=True)
-    if final_path.exists():
-        final_path.unlink()
     hasher = hashlib.sha256()
     with temp_path.open("rb") as handle:
         while True:
@@ -258,17 +281,18 @@ def complete_upload(upload_id: str, username: str) -> Dict[str, Any]:
                 break
             hasher.update(chunk)
     computed_sha256 = hasher.hexdigest()
-    temp_path.rename(final_path)
     expected_sha256 = (manifest.get("expected_sha256") or "").strip().lower()
-    checksum_valid = True
-    if expected_sha256:
-        checksum_valid = expected_sha256 == computed_sha256
+    checksum_valid = not expected_sha256 or expected_sha256 == computed_sha256
     manifest["sha256"] = computed_sha256
     manifest["checksum_valid"] = checksum_valid
+    # Validate before promoting the temp file so a failed completion stays retryable.
     if not checksum_valid:
-        if final_path.exists():
-            final_path.unlink()
+        _save(manifest)
         raise ValueError("Checksum validation failed for uploaded file.")
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    if final_path.exists():
+        final_path.unlink()
+    temp_path.rename(final_path)
     manifest["completed"] = True
     manifest["updated_at"] = _utc_now()
     return _to_response(_save(manifest))

@@ -1,15 +1,29 @@
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
-from .settings import DB_PATH
+from .settings import DB_PATH, DB_TIMEOUT_SECONDS
 
 
-def get_conn():
-    conn = sqlite3.connect(DB_PATH)
+@contextmanager
+def get_conn() -> Iterator[sqlite3.Connection]:
+    """Yield a connection and always close it.
+
+    `with sqlite3.connect(...)` only manages the transaction, not the handle, so the
+    previous usage leaked a connection per call. isolation_level=None puts us in
+    autocommit mode; the one multi-statement critical section (claim_next_run) opens
+    its own explicit BEGIN IMMEDIATE.
+    """
+    conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS, isolation_level=None)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(f"PRAGMA busy_timeout={int(DB_TIMEOUT_SECONDS * 1000)}")
+        yield conn
+    finally:
+        conn.close()
 
 
 def utc_now() -> str:
@@ -55,6 +69,21 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL
             )
             """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS run_share_tokens (
+                jti TEXT PRIMARY KEY,
+                run_id INTEGER NOT NULL,
+                created_by TEXT,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                revoked_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_run_share_tokens_run ON run_share_tokens (run_id)"
         )
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
         missing = {
@@ -256,3 +285,58 @@ def fetch_queue_item(run_id: int) -> Optional[Dict[str, Any]]:
         cur = conn.execute("SELECT * FROM run_queue WHERE run_id = ?", (run_id,))
         row = cur.fetchone()
     return dict(row) if row else None
+
+
+def record_share_token(jti: str, run_id: int, created_by: str, expires_at: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO run_share_tokens (jti, run_id, created_by, created_at, expires_at, revoked_at)
+            VALUES (?, ?, ?, ?, ?, NULL)
+            """,
+            (jti, run_id, created_by, utc_now(), expires_at),
+        )
+        conn.commit()
+
+
+def fetch_share_token(jti: str) -> Optional[Dict[str, Any]]:
+    with get_conn() as conn:
+        cur = conn.execute("SELECT * FROM run_share_tokens WHERE jti = ?", (jti,))
+        row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def list_share_tokens(run_id: int) -> List[Dict[str, Any]]:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT * FROM run_share_tokens WHERE run_id = ? ORDER BY created_at DESC",
+            (run_id,),
+        )
+        rows = cur.fetchall()
+    return [dict(row) for row in rows]
+
+
+def revoke_share_token(jti: str, run_id: Optional[int] = None) -> bool:
+    with get_conn() as conn:
+        if run_id is None:
+            cur = conn.execute(
+                "UPDATE run_share_tokens SET revoked_at = ? WHERE jti = ? AND revoked_at IS NULL",
+                (utc_now(), jti),
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE run_share_tokens SET revoked_at = ? WHERE jti = ? AND run_id = ? AND revoked_at IS NULL",
+                (utc_now(), jti, run_id),
+            )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def revoke_share_tokens_for_run(run_id: int) -> int:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE run_share_tokens SET revoked_at = ? WHERE run_id = ? AND revoked_at IS NULL",
+            (utc_now(), run_id),
+        )
+        conn.commit()
+        return int(cur.rowcount)

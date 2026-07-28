@@ -27,6 +27,10 @@ def read_sync_manifest(run_id: int) -> Optional[dict]:
     manifest_path = synced_root(run_id) / ".sync_manifest.json"
     if not manifest_path.exists() or not manifest_path.is_file():
         return None
+    try:
+        return json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
 
 
 def synced_root_size_bytes(root: Path) -> int:
@@ -37,10 +41,6 @@ def synced_root_size_bytes(root: Path) -> int:
         if path.is_file():
             total += path.stat().st_size
     return total
-    try:
-        return json.loads(manifest_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return None
 
 
 async def replace_synced_artifacts(
@@ -57,7 +57,7 @@ async def replace_synced_artifacts(
     root.mkdir(parents=True, exist_ok=True)
 
     stored_items: List[Dict[str, str]] = []
-    for upload, relative_path in zip(files, paths):
+    for upload, relative_path in zip(files, paths, strict=True):
         rel = relative_path.strip().lstrip("/")
         if not rel:
             raise ValueError("Artifact path must not be empty")

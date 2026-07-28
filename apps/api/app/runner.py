@@ -9,13 +9,30 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from .registry import get_dataset
-from .settings import ARTIFACT_ROOTS, PRESETS_DIR, REPO_ROOT, RUNS_DIR, SLURM_BACKEND, SSH_REMOTE_RUNS_DIR
+from .settings import (
+    ARTIFACT_ROOTS,
+    PIPELINE_TIMEOUT_SECONDS,
+    PRESETS_DIR,
+    REPO_ROOT,
+    RUNS_DIR,
+    SLURM_BACKEND,
+    SLURM_COMMAND_TIMEOUT_SECONDS,
+    SSH_REMOTE_RUNS_DIR,
+)
 from .ssh_exec import run_ssh_command, scp_upload, shell_quote
 from .storage import enforce_allowed_path
 
 PIPELINE_RUNNER = REPO_ROOT / "run_pipeline.py"
 LEGACY_RUN_BOUND_PATH_KEYS = ("run_dir", "output_dir", "ref_model_dir", "rcausal_output_dir")
 LEGACY_RUN_BOUND_SLURM_KEYS = ("output", "error")
+
+
+def run_subprocess(cmd: list[str], timeout: int, label: str) -> subprocess.CompletedProcess[str]:
+    """Run a child process with a hard wall-clock cap so it cannot pin a worker."""
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"{label} timed out after {timeout}s.") from exc
 
 
 def load_preset(preset_path: str) -> Dict[str, Any]:
@@ -123,7 +140,7 @@ def _prepare_run_local(run_name: str, config: Dict[str, Any], submit: bool) -> T
     if emit_sbatch:
         cmd.append("--emit-sbatch")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = run_subprocess(cmd, PIPELINE_TIMEOUT_SECONDS, "Pipeline preparation")
     if result.returncode != 0:
         raise RuntimeError(result.stderr or result.stdout or "Pipeline preparation failed")
 
@@ -132,7 +149,9 @@ def _prepare_run_local(run_name: str, config: Dict[str, Any], submit: bool) -> T
         submit_path = run_dir / "submit.sh"
         if not submit_path.exists():
             raise FileNotFoundError("submit.sh not found; use --emit-sbatch or enable slurm in config")
-        submit_result = subprocess.run(["sbatch", str(submit_path)], capture_output=True, text=True)
+        submit_result = run_subprocess(
+            ["sbatch", str(submit_path)], SLURM_COMMAND_TIMEOUT_SECONDS, "sbatch"
+        )
         if submit_result.returncode != 0:
             raise RuntimeError(submit_result.stderr or submit_result.stdout or "sbatch failed")
         match = re.search(r"Submitted batch job (\d+)", submit_result.stdout)
@@ -161,7 +180,7 @@ def _prepare_run_ssh(run_name: str, config: Dict[str, Any], submit: bool) -> Tup
         if emit_sbatch:
             cmd.append("--emit-sbatch")
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = run_subprocess(cmd, PIPELINE_TIMEOUT_SECONDS, "Pipeline preparation")
         if result.returncode != 0:
             raise RuntimeError(result.stderr or result.stdout or "Pipeline preparation failed")
 
@@ -236,7 +255,7 @@ def prepare_run_bundle(run_name: str, config: Dict[str, Any], remote_run_dir: Op
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
     cmd = [sys.executable, str(PIPELINE_RUNNER), "--config", str(config_path), "--emit-sbatch"]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = run_subprocess(cmd, PIPELINE_TIMEOUT_SECONDS, "Pipeline preparation")
     if result.returncode != 0:
         raise RuntimeError(result.stderr or result.stdout or "Pipeline preparation failed")
 

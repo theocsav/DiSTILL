@@ -18,10 +18,17 @@ USERS_REGISTRY_PATH = Path(
     os.environ.get("USERS_REGISTRY_PATH", str(REPO_ROOT / "registries" / "users.json"))
 ).resolve()
 DB_PATH = os.environ.get("DB_PATH", str(REPO_ROOT / "runs.db"))
+DB_TIMEOUT_SECONDS = float(os.environ.get("DB_TIMEOUT_SECONDS", "30"))
 BASIC_AUTH_USER = os.environ.get("BASIC_AUTH_USER", "admin")
 BASIC_AUTH_PASS = os.environ.get("BASIC_AUTH_PASS", "admin")
 AUTH_PASSWORD_HASH = os.environ.get("AUTH_PASSWORD_HASH")
 AUTH_IDENTIFIER_DOMAIN = os.environ.get("AUTH_IDENTIFIER_DOMAIN", "")
+# Extra admins beyond BASIC_AUTH_USER and users flagged with role=admin in the users registry.
+ADMIN_USERS = [
+    value.strip().lower()
+    for value in os.environ.get("ADMIN_USERS", "").split(",")
+    if value.strip()
+]
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "change-me")
 SESSION_TTL_MINUTES = int(os.environ.get("SESSION_TTL_MINUTES", "480"))
 PUBLIC_PROGRESS_TTL_HOURS = int(os.environ.get("PUBLIC_PROGRESS_TTL_HOURS", "168"))
@@ -55,6 +62,11 @@ SSH_KEY_PATH = os.environ.get("SSH_KEY_PATH", "").strip()
 SSH_KNOWN_HOSTS = os.environ.get("SSH_KNOWN_HOSTS", "").strip()
 SSH_STRICT_HOST_KEY_CHECKING = os.environ.get("SSH_STRICT_HOST_KEY_CHECKING", "yes").strip()
 SSH_CONNECT_TIMEOUT_SECONDS = int(os.environ.get("SSH_CONNECT_TIMEOUT_SECONDS", "10"))
+# Wall-clock caps so a wedged child process cannot pin an API worker forever.
+PIPELINE_TIMEOUT_SECONDS = int(os.environ.get("PIPELINE_TIMEOUT_SECONDS", "900"))
+SLURM_COMMAND_TIMEOUT_SECONDS = int(os.environ.get("SLURM_COMMAND_TIMEOUT_SECONDS", "120"))
+SSH_COMMAND_TIMEOUT_SECONDS = int(os.environ.get("SSH_COMMAND_TIMEOUT_SECONDS", "300"))
+SCP_TIMEOUT_SECONDS = int(os.environ.get("SCP_TIMEOUT_SECONDS", "1800"))
 SSH_REMOTE_RUNS_DIR = os.environ.get("SSH_REMOTE_RUNS_DIR", "").strip()
 QUEUE_REMOTE_RUNS_DIR = os.environ.get("QUEUE_REMOTE_RUNS_DIR", SSH_REMOTE_RUNS_DIR).strip()
 QUEUE_POLLER_TOKEN = os.environ.get("QUEUE_POLLER_TOKEN", "").strip()
@@ -74,6 +86,8 @@ UPLOAD_SESSION_TTL_HOURS = int(os.environ.get("UPLOAD_SESSION_TTL_HOURS", "72"))
 UPLOAD_CLEANUP_INTERVAL_SECONDS = int(os.environ.get("UPLOAD_CLEANUP_INTERVAL_SECONDS", "900"))
 UPLOAD_CLEANUP_ENABLED = os.environ.get("UPLOAD_CLEANUP_ENABLED", "true").lower() == "true"
 UPLOAD_MAX_CONCURRENT_PER_USER = int(os.environ.get("UPLOAD_MAX_CONCURRENT_PER_USER", "6"))
+# Per-request cap for PUT /uploads/{id}/chunk; the body is buffered, so this bounds memory.
+UPLOAD_MAX_CHUNK_BYTES = int(os.environ.get("UPLOAD_MAX_CHUNK_BYTES", str(64 * 1024 * 1024)))
 UPLOAD_MAX_SIZE_STAGED_GB = float(os.environ.get("UPLOAD_MAX_SIZE_STAGED_GB", "100"))
 UPLOAD_MAX_SIZE_METADATA_GB = float(os.environ.get("UPLOAD_MAX_SIZE_METADATA_GB", "5"))
 UPLOAD_MAX_SIZE_REFERENCE_GB = float(os.environ.get("UPLOAD_MAX_SIZE_REFERENCE_GB", "50"))
@@ -108,6 +122,12 @@ def validate_settings() -> None:
         raise RuntimeError("UPLOAD_CLEANUP_INTERVAL_SECONDS must be > 0.")
     if UPLOAD_MAX_CONCURRENT_PER_USER <= 0:
         raise RuntimeError("UPLOAD_MAX_CONCURRENT_PER_USER must be > 0.")
+    if UPLOAD_MAX_CHUNK_BYTES <= 0:
+        raise RuntimeError("UPLOAD_MAX_CHUNK_BYTES must be > 0.")
+    if min(PIPELINE_TIMEOUT_SECONDS, SLURM_COMMAND_TIMEOUT_SECONDS, SSH_COMMAND_TIMEOUT_SECONDS, SCP_TIMEOUT_SECONDS) <= 0:
+        raise RuntimeError("Subprocess timeout settings must be > 0.")
+    if DB_TIMEOUT_SECONDS <= 0:
+        raise RuntimeError("DB_TIMEOUT_SECONDS must be > 0.")
     if min(UPLOAD_MAX_SIZE_STAGED_GB, UPLOAD_MAX_SIZE_METADATA_GB, UPLOAD_MAX_SIZE_REFERENCE_GB) <= 0:
         raise RuntimeError("Upload max size limits must be > 0.")
     if SYNCED_ARTIFACT_RETENTION_DAYS < 0:

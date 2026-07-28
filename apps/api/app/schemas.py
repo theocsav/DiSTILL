@@ -137,10 +137,12 @@ class LoginResponse(BaseModel):
 class UserCreateRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=320)
     password: str = Field(..., min_length=8, max_length=256)
+    role: Literal["user", "admin"] = "user"
 
 
 class UserCreateResponse(BaseModel):
     username: str
+    role: str = "user"
     created_by: str
     created_at: str
 
@@ -152,8 +154,18 @@ class ShareRunLinkRequest(BaseModel):
 class ShareRunLinkResponse(BaseModel):
     run_id: int
     token: str
+    jti: str
     url: str
     expires_at: str
+
+
+class ShareRunLinkSummary(BaseModel):
+    jti: str
+    run_id: int
+    created_by: Optional[str] = None
+    created_at: str
+    expires_at: str
+    revoked_at: Optional[str] = None
 
 
 class PublicRunProgressResponse(BaseModel):

@@ -1,9 +1,15 @@
 import hashlib
 import json
+import os
+import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .settings import DATASETS_REGISTRY_PATH, PRESETS_DIR
+
+# Serializes read-modify-write cycles against the JSON registry within this process.
+_REGISTRY_LOCK = threading.RLock()
 
 
 def _load_json(path: Path) -> Any:
@@ -11,8 +17,26 @@ def _load_json(path: Path) -> Any:
 
 
 def _write_json(path: Path, value: Any) -> None:
+    """Write via a temp file + atomic replace so a crash cannot truncate the registry."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    payload = json.dumps(value, indent=2) + "\n"
+    handle = tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=str(path.parent),
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    try:
+        with handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(handle.name, path)
+    except BaseException:
+        Path(handle.name).unlink(missing_ok=True)
+        raise
 
 
 def list_datasets() -> List[Dict[str, Any]]:
@@ -47,37 +71,40 @@ def upsert_dataset(dataset: Dict[str, Any]) -> Dict[str, Any]:
     dataset_id = dataset.get("id")
     if not dataset_id:
         raise ValueError("Dataset id is required.")
-    datasets = list_datasets()
-    replaced = False
-    for index, existing in enumerate(datasets):
-        if existing.get("id") == dataset_id:
-            datasets[index] = dataset
-            replaced = True
-            break
-    if not replaced:
-        datasets.append(dataset)
-    save_datasets(datasets)
+    with _REGISTRY_LOCK:
+        datasets = list_datasets()
+        replaced = False
+        for index, existing in enumerate(datasets):
+            if existing.get("id") == dataset_id:
+                datasets[index] = dataset
+                replaced = True
+                break
+        if not replaced:
+            datasets.append(dataset)
+        save_datasets(datasets)
     return dataset
 
 
 def update_dataset(dataset_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    datasets = list_datasets()
-    for index, existing in enumerate(datasets):
-        if existing.get("id") == dataset_id:
-            merged = dict(existing)
-            merged.update(updates)
-            datasets[index] = merged
-            save_datasets(datasets)
-            return merged
+    with _REGISTRY_LOCK:
+        datasets = list_datasets()
+        for index, existing in enumerate(datasets):
+            if existing.get("id") == dataset_id:
+                merged = dict(existing)
+                merged.update(updates)
+                datasets[index] = merged
+                save_datasets(datasets)
+                return merged
     return None
 
 
 def delete_dataset(dataset_id: str) -> bool:
-    datasets = list_datasets()
-    new_datasets = [item for item in datasets if item.get("id") != dataset_id]
-    if len(new_datasets) == len(datasets):
-        return False
-    save_datasets(new_datasets)
+    with _REGISTRY_LOCK:
+        datasets = list_datasets()
+        new_datasets = [item for item in datasets if item.get("id") != dataset_id]
+        if len(new_datasets) == len(datasets):
+            return False
+        save_datasets(new_datasets)
     return True
 
 

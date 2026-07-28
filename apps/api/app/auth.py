@@ -2,8 +2,11 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import re
 import secrets
+import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +15,7 @@ from typing import Optional
 from fastapi import HTTPException, Request, Response, status
 
 from .settings import (
+    ADMIN_USERS,
     AUTH_PASSWORD_HASH,
     AUTH_IDENTIFIER_DOMAIN,
     BASIC_AUTH_PASS,
@@ -25,6 +29,10 @@ from .settings import (
     SESSION_SECRET,
     SESSION_TTL_MINUTES,
 )
+
+
+# Serializes read-modify-write cycles against the users registry within this process.
+_USERS_LOCK = threading.RLock()
 
 
 def _b64url_encode(data: bytes) -> str:
@@ -67,9 +75,25 @@ def _load_users() -> list[dict]:
 
 
 def _save_users(users: list[dict]) -> None:
-    payload = {"users": users}
+    payload = json.dumps({"users": users}, indent=2) + "\n"
     USERS_REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    USERS_REGISTRY_PATH.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    handle = tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=str(USERS_REGISTRY_PATH.parent),
+        prefix=f".{USERS_REGISTRY_PATH.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    try:
+        with handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(handle.name, USERS_REGISTRY_PATH)
+    except BaseException:
+        Path(handle.name).unlink(missing_ok=True)
+        raise
 
 
 def _verify_password_hash(password: str, encoded_hash: str) -> bool:
@@ -152,16 +176,33 @@ def canonical_identifier(identifier: str) -> str:
     return identifier.strip()
 
 
-def create_user(username: str, password: str, created_by: str) -> dict:
+def is_admin(identifier: str) -> bool:
+    """Admins are the bootstrap BASIC_AUTH_USER, anyone in ADMIN_USERS, or a
+    registry user carrying role=admin."""
+    normalized = normalize_identifier(identifier)
+    candidates = set(identifier_candidates(normalized))
+    if not candidates:
+        return False
+    if candidates & {normalize_identifier(BASIC_AUTH_USER)}:
+        return True
+    for admin in ADMIN_USERS:
+        if candidates & set(identifier_candidates(admin)):
+            return True
+    registry_user = _find_registry_user(identifier)
+    if registry_user:
+        if registry_user.get("role") == "admin" or registry_user.get("is_admin") is True:
+            return True
+    return False
+
+
+def create_user(username: str, password: str, created_by: str, role: str = "user") -> dict:
     normalized = normalize_identifier(username)
     if not re.fullmatch(r"[a-z0-9._-]{3,64}(@[a-z0-9.-]{3,255})?", normalized):
         raise ValueError("Username must be 3-64 chars and use [a-z0-9._-], optional @domain.")
     if len(password) < 8:
         raise ValueError("Password must be at least 8 characters.")
-    if _find_registry_user(normalized):
-        raise ValueError("User already exists.")
-
-    users = _load_users()
+    if role not in {"user", "admin"}:
+        raise ValueError("Role must be 'user' or 'admin'.")
     salt = secrets.token_urlsafe(16)
     iterations = 210000
     password_hash = f"pbkdf2_sha256${iterations}${salt}${_hash_password(password, salt, iterations)}"
@@ -169,14 +210,20 @@ def create_user(username: str, password: str, created_by: str) -> dict:
     record = {
         "username": normalized,
         "password_hash": password_hash,
+        "role": role,
         "created_by": created_by,
         "created_at": now,
         "updated_at": now,
     }
-    users.append(record)
-    _save_users(users)
+    with _USERS_LOCK:
+        if _find_registry_user(normalized):
+            raise ValueError("User already exists.")
+        users = _load_users()
+        users.append(record)
+        _save_users(users)
     return {
         "username": normalized,
+        "role": role,
         "created_by": created_by,
         "created_at": now,
     }
@@ -205,12 +252,14 @@ def verify_session(token: str) -> Optional[str]:
     return payload.get("sub")
 
 
-def create_progress_token(run_id: int, ttl_hours: int) -> str:
+def create_progress_token(run_id: int, ttl_hours: int) -> tuple[str, str, int]:
+    """Return (token, jti, exp). The jti lets the token be revoked server-side."""
     exp = int(time.time()) + max(ttl_hours, 1) * 3600
-    payload = {"typ": "run_progress", "run_id": run_id, "exp": exp}
+    jti = secrets.token_urlsafe(16)
+    payload = {"typ": "run_progress", "run_id": run_id, "exp": exp, "jti": jti}
     payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     signature = _sign(payload_bytes)
-    return f"{_b64url_encode(payload_bytes)}.{signature}"
+    return f"{_b64url_encode(payload_bytes)}.{signature}", jti, exp
 
 
 def verify_progress_token(token: str) -> Optional[dict]:
@@ -229,6 +278,8 @@ def verify_progress_token(token: str) -> Optional[dict]:
         return None
     run_id = payload.get("run_id")
     if not isinstance(run_id, int):
+        return None
+    if not isinstance(payload.get("jti"), str) or not payload["jti"]:
         return None
     return payload
 

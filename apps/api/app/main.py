@@ -3,12 +3,11 @@ import logging
 import re
 import secrets
 import shutil
-import subprocess
 import sys
 import threading
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -24,6 +23,7 @@ from .auth import (
     create_session,
     create_progress_token,
     ensure_csrf_cookie,
+    is_admin,
     require_csrf,
     require_session,
     set_session_cookie,
@@ -37,9 +37,14 @@ from .db import (
     append_run_message,
     fetch_queue_item,
     fetch_run,
+    fetch_share_token,
     init_db,
     list_runs,
+    list_share_tokens,
+    record_share_token,
     release_claim,
+    revoke_share_token,
+    revoke_share_tokens_for_run,
     update_run,
 )
 from .preflight_cache import build_cache_key, get_cached_join_result, set_cached_join_result
@@ -59,6 +64,7 @@ from .runner import (
     prepare_run,
     prepare_run_bundle,
     resolve_run_paths,
+    run_subprocess,
 )
 from .schemas import (
     DryRunRequest,
@@ -76,6 +82,7 @@ from .schemas import (
     RunResponse,
     ShareRunLinkRequest,
     ShareRunLinkResponse,
+    ShareRunLinkSummary,
     UploadFinalizeDatasetRequest,
     UploadInitRequest,
     UploadStatusResponse,
@@ -87,10 +94,13 @@ from .upload_store import (
     complete_upload,
     get_status as get_upload_status,
     init_upload,
+    max_size_for_role,
+    validate_role_file_name,
 )
 from .settings import (
     ALLOWED_ORIGINS,
     ARTIFACT_ROOTS,
+    PIPELINE_TIMEOUT_SECONDS,
     PREFLIGHT_CHECK_PATHS,
     QUEUE_ENABLED,
     RUNS_DIR,
@@ -101,6 +111,7 @@ from .settings import (
     PUBLIC_PROGRESS_TTL_HOURS,
     UPLOAD_CLEANUP_ENABLED,
     UPLOAD_CLEANUP_INTERVAL_SECONDS,
+    UPLOAD_MAX_CHUNK_BYTES,
     UPLOAD_SESSION_TTL_HOURS,
     PREFLIGHT_SLURM_FALLBACK,
     PREFLIGHT_CACHE_TTL_SECONDS,
@@ -130,6 +141,27 @@ from .ssh_exec import run_command, remote_path_exists
 logger = logging.getLogger(__name__)
 VALID_RUN_STATUSES = {"created", "queued", "prepared", "submitted", "running", "succeeded", "failed", "canceled", "error", "unknown"}
 TERMINAL_RUN_STATUSES = {"succeeded", "failed", "canceled", "error"}
+# A run the poller may report on: it has been handed to the queue at least once.
+# Excludes "created", so a token holder cannot touch runs that were never dispatched.
+POLLER_REPORTABLE_STATUSES = VALID_RUN_STATUSES - {"created"}
+
+
+def _require_poller_reportable(run_id: int) -> dict:
+    run = fetch_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    if run.get("status") not in POLLER_REPORTABLE_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Run {run_id} has not been dispatched to the queue (status={run.get('status')}).",
+        )
+    return run
+
+
+def require_admin(username: str = Depends(require_session)) -> str:
+    if not is_admin(username):
+        raise HTTPException(status_code=403, detail="Administrator privileges required.")
+    return username
 
 
 def require_queue_poller(x_queue_token: Optional[str] = Header(default=None, alias="X-Queue-Token")) -> None:
@@ -184,6 +216,12 @@ app.add_middleware(
 
 @app.get("/health")
 def health() -> dict:
+    # Unauthenticated liveness probe: no filesystem layout or capacity details here.
+    return {"status": "ok"}
+
+
+@app.get("/health/disk", dependencies=[Depends(require_session)])
+def disk_health() -> dict:
     return {"status": "ok", "disk": _disk_usage_report()}
 
 
@@ -220,7 +258,7 @@ def logout(response: Response) -> dict:
 @app.get("/auth/me")
 def whoami(request: Request, response: Response, username: str = Depends(require_session)) -> dict:
     csrf_token = ensure_csrf_cookie(request, response)
-    return {"username": username, "csrf_token": csrf_token}
+    return {"username": username, "csrf_token": csrf_token, "is_admin": is_admin(username)}
 
 
 @app.get("/auth/csrf", dependencies=[Depends(require_session)])
@@ -232,11 +270,11 @@ def csrf_token(request: Request, response: Response) -> dict:
 @app.post(
     "/auth/users",
     response_model=UserCreateResponse,
-    dependencies=[Depends(require_session), Depends(require_csrf)],
+    dependencies=[Depends(require_csrf)],
 )
-def create_auth_user(payload: UserCreateRequest, username: str = Depends(require_session)) -> dict:
+def create_auth_user(payload: UserCreateRequest, username: str = Depends(require_admin)) -> dict:
     try:
-        return create_user(payload.username, payload.password, username)
+        return create_user(payload.username, payload.password, username, role=payload.role)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -348,9 +386,30 @@ async def upload_chunk_endpoint(
     offset: int = Query(..., ge=0),
     username: str = Depends(require_session),
 ) -> dict:
-    data = await request.body()
+    # Reject oversized chunks on the declared length first, then enforce the same cap
+    # while streaming so a lying Content-Length cannot exhaust memory.
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            if int(declared) > UPLOAD_MAX_CHUNK_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Chunk exceeds maximum of {UPLOAD_MAX_CHUNK_BYTES} bytes.",
+                )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid Content-Length header.") from exc
+
+    buffer = bytearray()
+    async for piece in request.stream():
+        buffer.extend(piece)
+        if len(buffer) > UPLOAD_MAX_CHUNK_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Chunk exceeds maximum of {UPLOAD_MAX_CHUNK_BYTES} bytes.",
+            )
+
     try:
-        return append_chunk(upload_id, username, offset, data)
+        return append_chunk(upload_id, username, offset, bytes(buffer))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -394,22 +453,40 @@ async def upload_dataset(
     enforce_allowed_path(base_dir, ARTIFACT_ROOTS)
     base_dir.mkdir(parents=True, exist_ok=True)
 
-    async def _save(upload: UploadFile, target_name: str | None = None) -> str:
-        file_name = Path(target_name or upload.filename or "upload.bin").name
-        destination = (base_dir / file_name).resolve()
+    async def _save(upload: UploadFile, file_role: str) -> str:
+        # Apply the same extension allowlist and size cap as the chunked upload path.
+        try:
+            file_name = validate_role_file_name(file_role, upload.filename or "upload.bin")
+            max_bytes = max_size_for_role(file_role)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        destination = (base_dir / f"{file_role}__{file_name}").resolve()
         enforce_allowed_path(destination, ARTIFACT_ROOTS)
-        with destination.open("wb") as handle:
-            while True:
-                chunk = await upload.read(1024 * 1024)
-                if not chunk:
-                    break
-                handle.write(chunk)
-        await upload.close()
+        written = 0
+        try:
+            with destination.open("wb") as handle:
+                while True:
+                    chunk = await upload.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > max_bytes:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"File exceeds max size for role '{file_role}' ({max_bytes} bytes).",
+                        )
+                    handle.write(chunk)
+        except BaseException:
+            destination.unlink(missing_ok=True)
+            raise
+        finally:
+            await upload.close()
         return str(destination)
 
-    staged_path = await _save(staged_file)
-    metadata_path = await _save(cell_metadata_file)
-    reference_path = await _save(reference_file) if reference_file else ""
+    staged_path = await _save(staged_file, "staged")
+    metadata_path = await _save(cell_metadata_file, "metadata")
+    reference_path = await _save(reference_file, "reference") if reference_file else ""
 
     dataset = {
         "id": safe_id,
@@ -649,9 +726,7 @@ def queue_report_status(
     finished_at: str = Form(default=""),
     message: str = Form(default=""),
 ) -> dict:
-    run = fetch_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found.")
+    _require_poller_reportable(run_id)
     if status not in VALID_RUN_STATUSES:
         raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
     update_fields: dict = {"status": status}
@@ -678,9 +753,7 @@ async def queue_report_artifacts(
     paths: list[str] = Form(default=[]),
     files: list[UploadFile] = File(default=[]),
 ) -> dict:
-    run = fetch_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found.")
+    run = _require_poller_reportable(run_id)
     if not files:
         raise HTTPException(status_code=400, detail="At least one artifact file is required.")
     try:
@@ -803,26 +876,69 @@ def create_share_link(
     run_id: int,
     payload: ShareRunLinkRequest,
     request: Request,
+    username: str = Depends(require_session),
 ) -> dict:
     run = fetch_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
     ttl_hours = payload.expires_hours or PUBLIC_PROGRESS_TTL_HOURS
-    token = create_progress_token(run_id, ttl_hours)
-    expires_at = datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
+    token, jti, exp = create_progress_token(run_id, ttl_hours)
+    expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
+    record_share_token(jti, run_id, username, expires_at.isoformat())
     origin = str(request.base_url).rstrip("/")
     return {
         "run_id": run_id,
         "token": token,
+        "jti": jti,
         "url": f"{origin}/progress/{token}",
         "expires_at": expires_at.isoformat(),
     }
+
+
+@app.get(
+    "/runs/{run_id}/share",
+    response_model=list[ShareRunLinkSummary],
+    dependencies=[Depends(require_session)],
+)
+def list_share_links(run_id: int) -> list[dict]:
+    if not fetch_run(run_id):
+        raise HTTPException(status_code=404, detail="Run not found")
+    return list_share_tokens(run_id)
+
+
+@app.delete(
+    "/runs/{run_id}/share/{jti}",
+    dependencies=[Depends(require_session), Depends(require_csrf)],
+)
+def revoke_share_link(run_id: int, jti: str) -> dict:
+    if not fetch_run(run_id):
+        raise HTTPException(status_code=404, detail="Run not found")
+    if not revoke_share_token(jti, run_id):
+        raise HTTPException(status_code=404, detail="Share link not found or already revoked")
+    return {"ok": True, "run_id": run_id, "jti": jti}
+
+
+@app.delete(
+    "/runs/{run_id}/share",
+    dependencies=[Depends(require_session), Depends(require_csrf)],
+)
+def revoke_all_share_links(run_id: int) -> dict:
+    if not fetch_run(run_id):
+        raise HTTPException(status_code=404, detail="Run not found")
+    revoked = revoke_share_tokens_for_run(run_id)
+    return {"ok": True, "run_id": run_id, "revoked": revoked}
 
 
 @app.get("/public/runs/progress", response_model=PublicRunProgressResponse)
 def public_run_progress(token: str = Query(..., min_length=16)) -> dict:
     payload = verify_progress_token(token)
     if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    # Signature and expiry are not enough: the link must still be live server-side.
+    record = fetch_share_token(str(payload["jti"]))
+    if not record or record.get("revoked_at"):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    if int(record["run_id"]) != int(payload["run_id"]):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     run = fetch_run(int(payload["run_id"]))
     if not run:
@@ -889,7 +1005,10 @@ def dry_run(payload: DryRunRequest) -> dict:
     cmd = [sys.executable, str(PIPELINE_RUNNER), "--config", str(config_path)]
     if payload.emit_sbatch:
         cmd.append("--emit-sbatch")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = run_subprocess(cmd, PIPELINE_TIMEOUT_SECONDS, "Pipeline dry-run")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
 
     resolved_config_path = run_dir / "config.resolved.json"
     resolved_config_data = None

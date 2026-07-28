@@ -2,13 +2,13 @@ import json
 import subprocess
 import time
 import uuid
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .settings import (
     PREFLIGHT_SLURM_POLL_SECONDS,
     PREFLIGHT_SLURM_TIMEOUT_SECONDS,
     RUNS_DIR,
+    SLURM_COMMAND_TIMEOUT_SECONDS,
 )
 from .slurm import get_job_state
 from .ssh_exec import is_ssh_backend
@@ -33,7 +33,15 @@ def run_slurm_preflight(config: Dict[str, Any]) -> Dict[str, Any]:
     if not conda_env:
         return {"ok": False, "error": "preflight_slurm requires slurm.conda_env"}
 
-    version_check = subprocess.run(["sbatch", "--version"], capture_output=True, text=True)
+    try:
+        version_check = subprocess.run(
+            ["sbatch", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=SLURM_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "sbatch --version timed out on the API host."}
     if version_check.returncode != 0:
         return {"ok": False, "error": "sbatch is not available on the API host."}
 
@@ -62,7 +70,15 @@ def run_slurm_preflight(config: Dict[str, Any]) -> Dict[str, Any]:
         encoding="utf-8",
     )
 
-    submit = subprocess.run(["sbatch", str(submit_path)], capture_output=True, text=True)
+    try:
+        submit = subprocess.run(
+            ["sbatch", str(submit_path)],
+            capture_output=True,
+            text=True,
+            timeout=SLURM_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "sbatch submission timed out."}
     if submit.returncode != 0:
         return {"ok": False, "error": submit.stderr or submit.stdout or "sbatch failed"}
     job_id = _parse_job_id(submit.stdout)
@@ -106,7 +122,7 @@ def _build_submit_script(script_path: str, conda_env: str, slurm_cfg: Dict[str, 
 
     lines = [
         "#!/bin/bash",
-        f"#SBATCH --job-name=preflight",
+        "#SBATCH --job-name=preflight",
         f"#SBATCH --output={output_path}",
         f"#SBATCH --error={error_path}",
         "#SBATCH --ntasks=1",

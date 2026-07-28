@@ -16,6 +16,12 @@ def create_client(tmp_path: Path, extra_env: dict[str, str] | None = None) -> Te
     os.environ["RUNS_DIR"] = str(tmp_path / "runs")
     os.environ["PRESETS_DIR"] = str(tmp_path / "presets")
     os.environ["ARTIFACT_ROOTS"] = str(tmp_path)
+    # Every tmp_path-derived setting must be pinned here: these helpers mutate the
+    # process environment, so anything left unset leaks in from an earlier module.
+    os.environ["DATA_UPLOADS_DIR"] = str(tmp_path / "uploads")
+    os.environ["SYNCED_ARTIFACTS_DIR"] = str(tmp_path / "runs" / "_synced_artifacts")
+    os.environ["DATASETS_REGISTRY_PATH"] = str(tmp_path / "registries" / "datasets.json")
+    os.environ["USERS_REGISTRY_PATH"] = str(tmp_path / "registries" / "users.json")
     os.environ["WORKER_ENABLED"] = "false"
     os.environ["QUEUE_ENABLED"] = "true"
     os.environ["SESSION_SECRET"] = "test-secret"
@@ -125,7 +131,8 @@ def test_create_run_from_legacy_preset_rewrites_pinned_paths(tmp_path: Path) -> 
 
 
 def test_create_run_prepare_only_stays_local_when_ssh_backend_configured(tmp_path: Path, monkeypatch) -> None:
-    client = create_client(tmp_path)
+    # Called for its side effects: it configures the environment and reloads modules.
+    create_client(tmp_path)
     run_name = "prepare-local"
     output_dir = tmp_path / "outputs"
     data_path = tmp_path / "data.h5ad"
@@ -149,7 +156,7 @@ def test_create_run_prepare_only_stays_local_when_ssh_backend_configured(tmp_pat
 
     calls = []
 
-    def fake_run(cmd, capture_output, text):
+    def fake_run(cmd, capture_output, text, timeout=None):
         calls.append(cmd)
         run_dir = Path(cmd[cmd.index("--config") + 1]).parent
         (run_dir / "run.sh").write_text("#!/bin/bash\n", encoding="utf-8")
@@ -221,7 +228,7 @@ def test_prepare_run_bundle_rewrites_remote_output_dir(tmp_path: Path, monkeypat
     run_dir = tmp_path / "runs" / run_name
     output_dir = run_dir / "outputs"
 
-    def fake_run(cmd, capture_output, text):
+    def fake_run(cmd, capture_output, text, timeout=None):
         generated_run_dir = Path(cmd[cmd.index("--config") + 1]).parent
         (generated_run_dir / "run.sh").write_text("#!/bin/bash\n", encoding="utf-8")
         (generated_run_dir / "submit.sh").write_text("#!/bin/bash\ncd /tmp\n", encoding="utf-8")
@@ -464,7 +471,8 @@ def test_queue_claim_bundle_submission_and_status_append(tmp_path: Path, monkeyp
 
 
 def test_synced_artifact_cleanup_enforces_retention_and_quota(tmp_path: Path) -> None:
-    client = create_client(tmp_path)
+    # Called for its side effects: it configures the environment and reloads modules.
+    create_client(tmp_path)
 
     from app import synced_artifacts
 

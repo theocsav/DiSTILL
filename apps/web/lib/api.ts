@@ -136,8 +136,18 @@ export type Dataset = {
 export type ShareRunLink = {
   run_id: number;
   token: string;
+  jti: string;
   url: string;
   expires_at: string;
+};
+
+export type ShareRunLinkSummary = {
+  jti: string;
+  run_id: number;
+  created_by?: string | null;
+  created_at: string;
+  expires_at: string;
+  revoked_at?: string | null;
 };
 
 export type PublicRunProgress = {
@@ -162,10 +172,12 @@ export type PublicRunProgress = {
 export type CreateUserPayload = {
   username: string;
   password: string;
+  role?: "user" | "admin";
 };
 
 export type CreateUserResponse = {
   username: string;
+  role: string;
   created_by: string;
   created_at: string;
 };
@@ -359,6 +371,23 @@ export async function createShareLink(runId: number, expiresHours?: number) {
   });
 }
 
+export async function listShareLinks(runId: number) {
+  return apiFetch<ShareRunLinkSummary[]>(`/runs/${runId}/share`);
+}
+
+export async function revokeShareLink(runId: number, jti: string) {
+  return apiFetch<{ ok: boolean; run_id: number; jti: string }>(
+    `/runs/${runId}/share/${encodeURIComponent(jti)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function revokeAllShareLinks(runId: number) {
+  return apiFetch<{ ok: boolean; run_id: number; revoked: number }>(`/runs/${runId}/share`, {
+    method: "DELETE",
+  });
+}
+
 export async function fetchPublicRunProgress(token: string) {
   return apiFetch<PublicRunProgress>(`/public/runs/progress?token=${encodeURIComponent(token)}`);
 }
@@ -512,7 +541,7 @@ export async function logout() {
 }
 
 export async function fetchMe() {
-  const data = await apiFetch<{ username: string; csrf_token?: string }>("/auth/me");
+  const data = await apiFetch<{ username: string; csrf_token?: string; is_admin?: boolean }>("/auth/me");
   setCsrfToken(data.csrf_token);
   return data;
 }
