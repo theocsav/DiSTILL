@@ -1,0 +1,71 @@
+{
+  "id": "skin_visium_ssc_1mmfov_k4_generalization",
+  "label": "Skin Visium HC/SSc 1mm pseudo-FOV (fixed k=4, IBD-matched generalization test)",
+  "organ": "skin",
+  "platform": "visium",
+  "run_name": "skin_visium_ssc_1mmfov_k4_generalization",
+  "mode": "fixed_k",
+  "template_path": "pipeline_assets/scripts/IBD_3000epochs_systematicNMFapproach.py",
+  "reference_h5ad_path": "/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_reference.h5ad",
+  "cosmx_h5ad_path": "/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_visium_ssc_1mmfov_spatial.h5ad",
+  "cell_metadata_path": "/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_visium_ssc_1mmfov_metadata.csv",
+  "stages": [
+    "nmf",
+    "post_nmf",
+    "mlp",
+    "report"
+  ],
+  "post_nmf_mode": "papermill",
+  "post_nmf_notebook_path": "pipeline_assets/IBD_Post_NMF_Analysis.ipynb",
+  "mlp_script_path": "pipeline_assets/IBD_MLP_LeakageSafe.py",
+  "mlp_feature_scope": "fov",
+  "mlp_output_subdir": "MLP_FOVFeatures_k4_nested",
+  "mlp_input_subdir": "MLP_FOVFeatures_inputs_k4",
+  "report_title": "Skin Visium HC/SSc 1mm pseudo-FOV (fixed k=4, IBD-matched generalization test)",
+  "preflight_slurm": {
+    "time": "0-00:10:00",
+    "mem": "8gb",
+    "cpus_per_task": 2
+  },
+  "default_resources": {
+    "time": "96:00:00",
+    "cpus_per_task": 4,
+    "mem": "160gb",
+    "qos": "kejun.huang-b"
+  },
+  "default_params": {
+    "mode": "poisson_cumulative_improvement_k",
+    "k_min": 2,
+    "k_max": 20,
+    "poisson_n_runs": 10,
+    "poisson_max_iter": 5000,
+    "poisson_normalize_rows_to_sum1": false,
+    "poisson_cumulative_improvement_target": 0.75
+  },
+  "slurm": {
+    "enabled": true,
+    "job_name": "skin_k4_gen",
+    "account": "kejun.huang",
+    "time": "24:00:00",
+    "mem": "160gb",
+    "cpus_per_task": 4,
+    "qos": "kejun.huang-b",
+    "mail_user": "vasco.hinostroza@ufl.edu",
+    "mail_type": "ALL",
+    "modules": [
+      "R"
+    ],
+    "conda_env": "/blue/kejun.huang/vasco.hinostroza/nicherunner/conda/envs/ibd_cosmx_k4"
+  },
+  "notes": "Apples-to-apples generalization test against Tan et al.: fixed k=4, matching the IBD configuration, instead of the data-driven Poisson sweep that selected k=9 here. k drives the feature count (enrichment scales as C(k,2)), so k=9 produced 85 features on 14 patients where IBD used 44 on 9 subjects. Re-runs NMF onward from the EXISTING cell2location output; nothing upstream is recomputed and the earlier k=9 run is not modified. See docs/PIPELINE_STAGE_REVIEW.md.",
+  "n_components": 4,
+  "nmf_input_h5ad_path": "/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/skin_visium_ssc_1mmfov_poisson75_split/outputs/cosmx_cell2loc_only.h5ad",
+  "output_dir": "/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/skin_visium_ssc_1mmfov_k4_generalization/outputs",
+  "mlp_mode": "nested_cv",
+  "mlp_selection_metric": "macro_f1",
+  "mlp_grid_profile": "compact",
+  "mlp_backend": "sklearn",
+  "mlp_max_epochs": 1000,
+  "mlp_patience": 20,
+  "mlp_skip_shap": true
+}

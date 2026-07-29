@@ -846,10 +846,16 @@ def main():
             if not nmf_script_source.exists():
                 raise FileNotFoundError(f"NMF-only script not found: {nmf_script_source}")
             nmf_text = nmf_script_source.read_text(encoding="utf-8")
+            # Defaults to this run's own output_dir. Override to re-run NMF at a
+            # different k against an existing cell2location result without writing
+            # into, and thereby overwriting, that earlier run's directory.
+            nmf_input_h5ad = config.get("nmf_input_h5ad_path") or str(
+                Path(output_dir) / "cosmx_cell2loc_only.h5ad"
+            )
             nmf_text = apply_assignment(
                 nmf_text,
                 "input_h5ad_path",
-                render_value(str(Path(output_dir) / "cosmx_cell2loc_only.h5ad")),
+                render_value(str(nmf_input_h5ad)),
                 warnings,
             )
             nmf_text = apply_assignment(nmf_text, "nmf_output_dir", render_value(output_dir), warnings)
