@@ -1,0 +1,17 @@
+# Python 3.12 / Linux environment for the exploratory NOVAE 1.1.1 pilot.
+# These package pins do not pin CUDA runtime libraries or system GPU drivers.
+novae==1.1.1
+anndata==0.11.4
+numpy==2.2.6
+pandas==2.2.3
+scipy==1.14.1
+h5py==3.12.1
+torch==2.5.1
+torch-geometric==2.6.1
+lightning==2.5.0
+scanpy==1.10.4
+huggingface-hub==0.32.6
+fast-array-utils==1.3.1
+safetensors==0.5.2
+igraph==0.11.8
+pytest==8.3.5
