@@ -36,6 +36,9 @@ from scripts.run_novae_pilot import (
     validate_input,
     validate_manifest,
     validate_spatial_graph,
+    _canonicalize_core_provenance,
+    _canonicalize_provenance,
+    _h5ad_safe_provenance,
 )
 
 
@@ -345,8 +348,8 @@ def test_domain_and_latent_summaries_and_nmf_preservation():
         assert_nmf_unchanged(data, snapshot)
 
 
-def _cli_args(input_path, output_path, model_path):
-    return _build_parser().parse_args([
+def _cli_args(input_path, output_path, model_path, graph_radius_um=None):
+    values = [
         "--input-h5ad", str(input_path), "--output-dir", str(output_path),
         "--dataset-id", "synthetic", "--slide-key", "slide", "--group-key", "patient",
         "--technology", "visium", "--expression-mode", "raw_counts",
@@ -354,7 +357,10 @@ def _cli_args(input_path, output_path, model_path):
         "--primary-resolution", "1.0", "--expected-neighbor-distance-um", "100",
         "--accelerator", "cpu",
         "--workers", "0", "--coordinate-strategy", "materialized_microns",
-    ])
+    ]
+    if graph_radius_um is not None:
+        values.extend(["--graph-radius-um", str(graph_radius_um)])
+    return _build_parser().parse_args(values)
 
 
 def _fake_novae(monkeypatch, late_failure=False):
@@ -436,11 +442,20 @@ def test_mocked_end_to_end_initializes_fresh_slides_and_embedded_core_matches_ex
     calls = _fake_novae(monkeypatch)
     from scripts import run_novae_pilot as pilot
     output_path = tmp_path / "out"
-    assert pilot._run(_cli_args(input_path, output_path, model_path)) == 0
+    assert pilot._run(_cli_args(input_path, output_path, model_path, graph_radius_um=100)) == 0
     assert output_path.exists()
+    assert not list(output_path.glob("*.partial"))
+    assert not list(tmp_path.glob(".out.staging-*"))
     envelope = json.loads((output_path / "novae_provenance_synthetic.json").read_text())
+    coordinate_audit = json.loads((output_path / "novae_coordinate_audit_synthetic.json").read_text())
     written = ad.read_h5ad(output_path / "novae_synthetic_zero_shot.h5ad")
     assert written.uns["novae_pilot_provenance"] == envelope["run"]
+    per_slide = envelope["run"]["radius_pruning"]["per_slide"]
+    assert set(per_slide) == {"A", "B"}
+    assert all("slide" not in record for record in per_slide.values())
+    assert per_slide["A"]["obs"] == 2
+    assert isinstance(coordinate_audit["graph_radius_pruning"]["per_slide"], list)
+    assert coordinate_audit["graph_radius_pruning"]["per_slide"][0]["slide"] == "A"
     assert written.obs["slide"].astype(str).tolist() == ["A", "A", "B", "B"]
     assert envelope["run"]["novae_auto_preprocessing"] is True
     assert envelope["run"]["auto_preprocessing_applied"] is True
@@ -462,6 +477,38 @@ def test_mocked_end_to_end_initializes_fresh_slides_and_embedded_core_matches_ex
         assert (output_path / f"novae_domain_adjacency_synthetic_res-{token}.csv").exists()
         assert (output_path / f"novae_domain_proportions_synthetic_res-{token}.csv").exists()
     assert (output_path / "novae_zero_shot_model").exists()
+
+
+@pytest.mark.parametrize("normalizer", [_canonicalize_provenance, _h5ad_safe_provenance])
+def test_provenance_normalizers_reject_mapping_key_collisions(normalizer):
+    with pytest.raises(NovaPilotError, match="mapping-key collision.*1"):
+        normalizer({1: "a", "1": "b"})
+    with pytest.raises(NovaPilotError, match=r"provenance\.nested.*mapping-key collision"):
+        normalizer({"nested": {1: "a", "1": "b"}})
+
+
+@pytest.mark.parametrize("normalizer", [_canonicalize_provenance, _h5ad_safe_provenance])
+def test_provenance_normalizers_reject_nullable_sequence_members(normalizer):
+    with pytest.raises(NovaPilotError, match=r"provenance\[1\].*None"):
+        normalizer(["present", None])
+    with pytest.raises(NovaPilotError, match=r"provenance\.nested\[0\].*None"):
+        normalizer({"nested": (None,)})
+
+
+def test_core_provenance_normalizes_nested_record_and_mixed_lists():
+    provenance = {
+        "radius_pruning": {"per_slide": [
+            {"slide": "B", "obs": 2}, {"slide": "A", "obs": 3},
+        ]},
+        "mixed": [1, "two", {"nested": True}],
+    }
+    result = _canonicalize_core_provenance(provenance)
+    assert result["radius_pruning"]["per_slide"] == {
+        "A": {"obs": 3}, "B": {"obs": 2},
+    }
+    assert result["mixed"] == {
+        "0": 1, "1": "two", "2": {"nested": True},
+    }
 
 
 def test_late_failure_removes_final_output_directory(tmp_path, monkeypatch):

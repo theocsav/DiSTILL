@@ -48,31 +48,135 @@ def _require_anndata() -> Any:
     return ad
 
 
-def _canonicalize_provenance(value: Any) -> Any:
+def _stringified_mapping_items(value: Mapping[Any, Any], path: str) -> list[tuple[str, Any, Any]]:
+    """Return sorted mapping items while rejecting lossy string-key collisions."""
+    seen: dict[str, Any] = {}
+    items: list[tuple[str, Any, Any]] = []
+    for key, item in value.items():
+        string_key = str(key)
+        if string_key in seen:
+            raise NovaPilotError(
+                f"{path} has mapping-key collision: {seen[string_key]!r} and {key!r} "
+                f"both stringify to {string_key!r}"
+            )
+        seen[string_key] = key
+        items.append((string_key, key, item))
+    return sorted(items, key=lambda item: item[0])
+
+
+def _canonicalize_provenance(value: Any, path: str = "provenance") -> Any:
     """Canonicalize JSON/H5AD-safe values before writing either provenance copy.
 
     AnnData versions differ in how they serialize ``None`` mapping values.  An
-    absent mapping entry is therefore the canonical representation, while nulls
-    in sequences retain their JSON primitive meaning.  Numeric and boolean
-    primitives are deliberately not converted to strings.
+    absent mapping entry is therefore the canonical representation.  Nullable
+    sequence members are rejected because they cannot be represented reliably
+    by AnnData's list writer; core provenance does not require them. Numeric and
+    boolean primitives are deliberately not converted to strings.
     """
     if isinstance(value, Mapping):
         return {
-            str(key): _canonicalize_provenance(item)
-            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+            string_key: _canonicalize_provenance(item, f"{path}.{string_key}")
+            for string_key, _, item in _stringified_mapping_items(value, path)
             if item is not None and not (
                 isinstance(item, (list, tuple, np.ndarray)) and len(item) == 0
             )
         }
     if isinstance(value, (list, tuple)):
-        return [_canonicalize_provenance(item) for item in value]
+        result = []
+        for index, item in enumerate(value):
+            if item is None:
+                raise NovaPilotError(
+                    f"{path}[{index}] is None; nullable sequence members are not supported in provenance"
+                )
+            result.append(_canonicalize_provenance(item, f"{path}[{index}]"))
+        return result
     if isinstance(value, np.ndarray):
-        return [_canonicalize_provenance(item) for item in value.tolist()]
+        return _canonicalize_provenance(value.tolist(), path)
     if isinstance(value, np.generic):
-        return _canonicalize_provenance(value.item())
+        return _canonicalize_provenance(value.item(), path)
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
-    raise NovaPilotError(f"provenance contains unsupported value type: {type(value).__name__}")
+    raise NovaPilotError(f"{path} contains unsupported value type: {type(value).__name__}")
+
+
+def _h5ad_safe_provenance(value: Any, path: str = "provenance") -> Any:
+    """Make nested provenance values representable by AnnData's HDF5 writer.
+
+    AnnData writes lists as NumPy arrays, so a list containing mappings (or
+    heterogeneous values) becomes an object array and fails during HDF5 string
+    conversion.  Record lists are represented as deterministic mappings.  A
+    per-slide record list uses the slide identifier as its key and removes the
+    now-redundant nested ``slide`` field; other record lists use stable index
+    keys so no information is discarded.
+    """
+    if isinstance(value, Mapping):
+        return {
+            string_key: _h5ad_safe_provenance(item, f"{path}.{string_key}")
+            for string_key, _, item in _stringified_mapping_items(value, path)
+            if item is not None and not (
+                isinstance(item, (list, tuple, np.ndarray)) and len(item) == 0
+            )
+        }
+    if isinstance(value, np.ndarray):
+        return _h5ad_safe_provenance(value.tolist(), path)
+    if isinstance(value, np.generic):
+        return _h5ad_safe_provenance(value.item(), path)
+    if isinstance(value, (list, tuple)):
+        items = []
+        for index, item in enumerate(value):
+            if item is None:
+                raise NovaPilotError(
+                    f"{path}[{index}] is None; nullable sequence members are not supported in provenance"
+                )
+            items.append(_h5ad_safe_provenance(item, f"{path}[{index}]"))
+        if not items:
+            return items
+        if all(isinstance(item, Mapping) for item in items):
+            if all("slide" in item for item in items):
+                keyed: dict[str, Any] = {}
+                for item in items:
+                    slide = str(item["slide"])
+                    if slide in keyed:
+                        raise NovaPilotError(f"{path} contains duplicate slide {slide!r}")
+                    keyed[slide] = {key: entry for key, entry in item.items() if key != "slide"}
+                return {key: keyed[key] for key in sorted(keyed)}
+            return {str(index): item for index, item in enumerate(items)}
+        scalar_types = {type(item) for item in items}
+        numeric_scalars = all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in items)
+        if all(isinstance(item, (str, bool, int, float)) for item in items) and (
+            len(scalar_types) == 1 or numeric_scalars
+        ):
+            return items
+        # This indexed form preserves mixed primitive types and nested values
+        # without asking AnnData to coerce them into one NumPy object array.
+        return {str(index): item for index, item in enumerate(items)}
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    raise NovaPilotError(f"{path} contains unsupported H5AD provenance type: {type(value).__name__}")
+
+
+def _assert_h5ad_provenance_serializable(value: Any, path: str = "provenance") -> None:
+    """Assert that canonical provenance contains only AnnData-safe structures."""
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise NovaPilotError(f"{path} has a non-string mapping key")
+            _assert_h5ad_provenance_serializable(item, f"{path}.{key}")
+        return
+    if isinstance(value, list):
+        if not value or all(isinstance(item, (str, bool, int, float)) for item in value):
+            return
+        raise NovaPilotError(f"{path} contains a non-scalar list")
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return
+    raise NovaPilotError(f"{path} contains unsupported H5AD provenance type: {type(value).__name__}")
+
+
+def _canonicalize_core_provenance(value: Any) -> Any:
+    """Canonicalize and make embedded core provenance safe for AnnData."""
+    safe = _h5ad_safe_provenance(_canonicalize_provenance(value))
+    _assert_h5ad_provenance_serializable(safe)
+    return safe
 
 
 def _is_missing(value: Any) -> bool:
@@ -1533,7 +1637,7 @@ def _run_impl(args: argparse.Namespace) -> int:
     # representations because AnnData versions may omit None mapping values.
     # Final artifact hashes belong in the external envelope, avoiding the
     # impossible self-hash/circular update.
-    core_run_provenance = _canonicalize_provenance(core_run_provenance)
+    core_run_provenance = _canonicalize_core_provenance(core_run_provenance)
     adata.uns["novae_pilot_provenance"] = core_run_provenance
     output_h5ad = args.output_dir / f"novae_{args.dataset_id}_zero_shot.h5ad"
     atomic_h5ad(adata, output_h5ad)
