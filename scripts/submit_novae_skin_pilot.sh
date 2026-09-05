@@ -34,6 +34,7 @@ PRIMARY_RESOLUTION="${NOVAE_PRIMARY_RESOLUTION:-1.0}"
 EXPECTED_DISTANCE_UM="${NOVAE_EXPECTED_NEIGHBOR_DISTANCE_UM:-100}"
 DISTANCE_TOLERANCE="${NOVAE_NEIGHBOR_DISTANCE_RELATIVE_TOLERANCE:-0.5}"
 GRAPH_RADIUS_UM="${NOVAE_GRAPH_RADIUS_UM:-100}"
+MIN_DOMAIN_ASSIGNMENT_COVERAGE="${NOVAE_MIN_DOMAIN_ASSIGNMENT_COVERAGE:-0.70}"
 WORKERS="${NOVAE_WORKERS:-8}"
 SEED="${NOVAE_SEED:-42}"
 JOB_SCRIPT="${RUN_ROOT}/submit_novae_skin_pilot.sbatch"
@@ -89,6 +90,10 @@ if ! awk -v value="${DISTANCE_TOLERANCE}" 'BEGIN { exit !(value >= 0 && value < 
 fi
 if ! awk -v value="${GRAPH_RADIUS_UM}" 'BEGIN { exit !(value > 0 && value < 1e308) }' || ! [[ "${GRAPH_RADIUS_UM}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "NOVAE_GRAPH_RADIUS_UM must be a positive finite numeric value" >&2
+  exit 2
+fi
+if ! awk -v value="${MIN_DOMAIN_ASSIGNMENT_COVERAGE}" 'BEGIN { exit !(value >= 0 && value <= 1) }' || ! [[ "${MIN_DOMAIN_ASSIGNMENT_COVERAGE}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "NOVAE_MIN_DOMAIN_ASSIGNMENT_COVERAGE must be a numeric value in [0,1]" >&2
   exit 2
 fi
 RESOLUTION_ARGS="--resolutions ${RESOLUTIONS[*]}"
@@ -163,6 +168,7 @@ python scripts/run_novae_pilot.py \\
   --expected-neighbor-distance-um ${EXPECTED_DISTANCE_UM} \\
   --neighbor-distance-relative-tolerance ${DISTANCE_TOLERANCE} \\
   --graph-radius-um ${GRAPH_RADIUS_UM} \\
+  --min-domain-assignment-coverage ${MIN_DOMAIN_ASSIGNMENT_COVERAGE} \\
   --accelerator gpu \\
   --workers ${WORKERS} \\
   --seed ${SEED} \\

@@ -43,7 +43,18 @@ The following is the working external contract, based on the Nature Methods
   supports Visium and CosMx. It builds/records the spatial graph in
   `obsp["spatial_connectivities"]`.
 - The published/current default latent representation is 64-dimensional and
-  is written to `obsm["novae_latent"]`. Domain assignments are written to
+  is written to `obsm["novae_latent"]`. In v1.1.1, `obs["neighborhood_valid"]`
+  is the official validity mask: NOVAE fills invalid-neighborhood latent rows
+  with zeros and leaf/domain rows with missing values. The adapter retains
+  those values, audits assignment coverage (default minimum 0.70) overall and
+  per slide at every resolution, and fails if a valid neighborhood is missing
+  a domain or an invalid row receives one. Domain and latent summaries exclude
+  unassigned/invalid rows and report their denominators; no literal `nan`
+  domain is fabricated. Zero-count expression rows and zero-degree graph rows
+  are retained as QC, and radius-pruning pre/post zero-degree counts are
+  recorded. If coverage is below threshold, inspect graph/coordinate and tissue
+  QC and resubmit rather than imputing labels.
+- Domain assignments are written to
   `obs["novae_domains_*"]` (the exact suffix is a model/config detail and must
   be recorded). Zero-shot exploratory inference uses `reference="all"` and
   computes one representation and updates cohort-derived zero-shot prototypes,
@@ -236,10 +247,12 @@ run ID and dataset ID:
   freezing; the artifact must assert that held-out IDs are absent from the
   prototype references;
 - `novae_domain_adjacency_<dataset>_res-<token>.csv` and matching slide/patient
-  proportion tables: graph-edge counts/proportions by resolution, with a safe
-  normalized resolution token;
+  proportion tables: graph-edge counts/proportions by resolution (excluding
+  edges touching unassigned observations and reporting total/used/excluded
+  edge coverage), with a safe normalized resolution token;
 - `novae_domain_resolution_summary_<dataset>.csv`: resolution, domain key,
-  domain count/coverage/size summaries, and domains present per slide;
+  domain count/size summaries, overall and per-slide total/valid/assigned/
+  unassigned coverage audits, and domains present per slide;
 - `novae_science_metrics_<dataset>.csv`: official FIDE/JSD per resolution and
   interpretation metadata; `novae_neighbor_distance_qc_<dataset>.csv` records
   calibrated physical edge-distance medians and tolerance decisions;

@@ -17,6 +17,8 @@ pytest.importorskip("anndata")
 import anndata as ad
 from scripts.run_novae_pilot import (
     NovaPilotError,
+    DEFAULT_DOMAIN_ASSIGNMENT_COVERAGE,
+    audit_domain_assignments,
     _build_parser,
     assert_nmf_unchanged,
     expression_audit,
@@ -26,6 +28,7 @@ from scripts.run_novae_pilot import (
     harmonize_visium_coordinates,
     latent_summary,
     post_inference_expression_audit,
+    _science_metrics,
     normalize_resolutions,
     prune_spatial_graph_radius,
     _resolve_model,
@@ -43,8 +46,10 @@ def _adata(coords=None, slides=None) -> ad.AnnData:
     result.obs["slide"] = slides
     result.obs["patient"] = ["P1" if x == "A" else "P2" for x in slides]
     result.obsm["spatial"] = coords
-    result.obs["NMF_factor"] = pd.Categorical(["0", "1", "0", "1"])
-    result.obs["dominant_nmf_factor"] = [0, 1, 0, 1]
+    nmf_labels = [str(index % 2) for index in range(len(coords))]
+    result.obs["NMF_factor"] = pd.Categorical(nmf_labels)
+    result.obs["dominant_nmf_factor"] = [index % 2 for index in range(len(coords))]
+    result.obs["neighborhood_valid"] = True
     return result
 
 
@@ -111,6 +116,11 @@ def test_expression_modes_are_explicit_and_audited():
     data.X = sparse.csr_matrix(np.asarray(data.X, dtype=np.int64))
     counts = expression_audit(data, "raw_counts")
     assert counts["mode"] == "raw_counts"
+    assert counts["zero_count_rows"]["count"] == 0
+    data.X[0, :] = 0
+    zero_counts = expression_audit(data, "raw_counts")
+    assert zero_counts["zero_count_rows"]["count"] == 1
+    assert zero_counts["zero_count_rows"]["obs_ids"] == ["0"]
     assert counts["X"]["sparse"] is True and counts["X"]["integer_like"] is True
     data.X = data.X.astype(float).tocsr()
     data.X.data[0] = -0.5
@@ -152,6 +162,14 @@ def test_graph_cross_slide_rejected_and_diagnostics():
     diagnostics = graph_diagnostics(data, "slide")
     assert diagnostics.set_index("slide").loc["A", "undirected_edges"] == 3
     assert diagnostics.set_index("slide").loc["A", "connected_components"] == 1
+    assert diagnostics.set_index("slide").loc["B", "zero_degree_count"] == 1
+    explicit_zero = data.obsp["spatial_connectivities"].copy()
+    explicit_zero[3, 3] = 0.0
+    assert explicit_zero.nnz > data.obsp["spatial_connectivities"].nnz
+    data.obsp["spatial_connectivities"] = explicit_zero
+    explicit_diagnostics = graph_diagnostics(data, "slide")
+    assert explicit_diagnostics.set_index("slide").loc["B", "zero_degree_count"] == 1
+    assert data.obsp["spatial_connectivities"].nnz == explicit_zero.nnz
     graph = data.obsp["spatial_connectivities"].tolil()
     graph[0, 3] = 1
     data.obsp["spatial_connectivities"] = graph.tocsr()
@@ -164,10 +182,15 @@ def test_radius_pruning_uses_materialized_microns_and_shared_scalar_scale():
     graph = sparse.csr_matrix(
         [[0, 1, 0, 0], [1, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 0]], dtype=float
     )
-    data.obsp["spatial_connectivities"] = graph.copy()
+    explicit_graph = graph.copy()
+    explicit_graph[2, 2] = 0.0
+    data.obsp["spatial_connectivities"] = explicit_graph
     data.obsp["spatial_distances"] = graph.copy()
     result = prune_spatial_graph_radius(data, "slide", 75, 1.0)
     assert result["removed_undirected_edges"] == 1
+    assert result["pre_zero_degree_count"] == 1 and result["post_zero_degree_count"] == 2
+    assert result["per_slide"][0]["pre_zero_degree_count"] == 0
+    assert result["per_slide"][0]["post_zero_degree_count"] == 1
     assert data.obsp["spatial_connectivities"].nnz == 2
     assert data.obsp["spatial_distances"].nnz == 2
     data.obsp["spatial_connectivities"] = graph.copy()
@@ -215,6 +238,93 @@ def test_domain_adjacency_counts_undirected_edges_and_normalizes():
     assert pairs.loc[("d1", "d1"), "edge_count"] == 1
     assert pairs.loc[("d1", "d2"), "edge_count"] == 2
     assert pairs["edge_proportion"].sum() == pytest.approx(1.0)
+
+
+def test_invalid_neighborhoods_are_reported_and_excluded_from_summaries():
+    data = _adata(coords=[[0, 0], [1, 0], [2, 0], [3, 0]], slides=["A"] * 4)
+    data.obs["neighborhood_valid"] = [True, True, True, False]
+    data.obs["domain"] = pd.Categorical(["d1", "d2", "d1", np.nan])
+    data.obs["novae_leaves"] = pd.Categorical(["D1", "D2", "D1", np.nan])
+    data.obsm["novae_latent"] = np.asarray([[1, 2], [3, 4], [5, 6], [0, 0]], dtype=float)
+    audit = audit_domain_assignments(data, "slide", "domain")
+    assert audit["minimum_coverage"] == DEFAULT_DOMAIN_ASSIGNMENT_COVERAGE
+    assert data.obs["novae_leaves"].isna().sum() == 1
+    assert audit["overall"] == {
+        **audit["overall"], "total": 4, "valid_neighborhood": 3,
+        "assigned": 3, "unassigned": 1, "coverage": pytest.approx(0.75),
+    }
+    proportions = domain_proportions(data, "slide", "domain")
+    assert set(proportions["domain"]) == {"d1", "d2"}
+    assert proportions.iloc[0]["total"] == 4 and proportions.iloc[0]["assigned"] == 3
+    data.obsp["spatial_connectivities"] = sparse.csr_matrix(
+        [[0, 1, 0, 0], [1, 0, 1, 0], [0, 1, 0, 1], [0, 0, 1, 0]], dtype=float
+    )
+    adjacency = domain_adjacency(data, "slide", "domain")
+    assert adjacency.iloc[0]["total_edges"] == 3
+    assert adjacency.iloc[0]["used_edges"] == 2 and adjacency.iloc[0]["excluded_edges"] == 1
+    latent = latent_summary(data, "slide", "novae_latent")
+    assert latent.iloc[0]["total"] == 4 and latent.iloc[0]["valid"] == 3 and latent.iloc[0]["excluded"] == 1
+    assert latent.iloc[0]["latent_0_mean"] == pytest.approx(3)
+
+
+def test_domain_assignment_coverage_is_enforced_per_slide_even_when_overall_passes():
+    data = _adata(coords=[[index, 0] for index in range(10)], slides=["A"] * 8 + ["B"] * 2)
+    data.obs["neighborhood_valid"] = [True] * 8 + [False, False]
+    data.obs["domain"] = pd.Categorical(["d1"] * 8 + [np.nan, np.nan])
+    with pytest.raises(NovaPilotError, match="failing slides.*B.*total=2.*assigned=0.*coverage=0.0000"):
+        audit_domain_assignments(data, "slide", "domain", 0.70)
+
+
+def test_science_metrics_reject_nonfinite_official_results(monkeypatch):
+    data = _adata()
+    data.obs["domain"] = pd.Categorical(["d1", "d2", "d1", "d2"])
+    module = types.ModuleType("novae")
+    module.monitor = types.SimpleNamespace(
+        mean_fide_score=lambda *args, **kwargs: np.nan,
+        jensen_shannon_divergence=lambda *args, **kwargs: np.inf,
+    )
+    monkeypatch.setitem(sys.modules, "novae", module)
+    with pytest.raises(NovaPilotError, match="non-finite FIDE"):
+        _science_metrics(module, data, "slide", "domain")
+
+
+def test_domain_assignment_validation_rejects_valid_missing_and_low_coverage():
+    data = _adata()
+    data.obs["neighborhood_valid"] = [True, True, False, False]
+    data.obs["domain"] = pd.Categorical(["d1", np.nan, np.nan, np.nan])
+    with pytest.raises(NovaPilotError, match="valid neighborhoods"):
+        audit_domain_assignments(data, "slide", "domain", 0.0)
+    data.obs["neighborhood_valid"] = [True, False, False, False]
+    data.obs["domain"] = pd.Categorical(["d1", np.nan, np.nan, np.nan])
+    with pytest.raises(NovaPilotError, match="below minimum"):
+        audit_domain_assignments(data, "slide", "domain", 0.70)
+    data.obs["domain"] = ["nan", np.nan, np.nan, np.nan]
+    with pytest.raises(NovaPilotError, match="valid neighborhoods"):
+        audit_domain_assignments(data, "slide", "domain", 0.0)
+
+
+def test_domain_assignment_coverage_parser_and_launcher_override(tmp_path):
+    args = _build_parser().parse_args([
+        "--input-h5ad", "in.h5ad", "--output-dir", "out", "--dataset-id", "x",
+        "--slide-key", "slide", "--expression-mode", "raw_counts",
+        "--coordinate-strategy", "materialized_microns",
+    ])
+    assert args.min_domain_assignment_coverage == pytest.approx(0.70)
+    args = _build_parser().parse_args([
+        "--input-h5ad", "in.h5ad", "--output-dir", "out", "--dataset-id", "x",
+        "--slide-key", "slide", "--expression-mode", "raw_counts",
+        "--coordinate-strategy", "materialized_microns", "--min-domain-assignment-coverage", "0.85",
+    ])
+    assert args.min_domain_assignment_coverage == pytest.approx(0.85)
+    script = Path(__file__).parents[1] / "scripts" / "submit_novae_skin_pilot.sh"
+    env = os.environ.copy()
+    env.update({"NOVAE_REPO_DIR": str(tmp_path / "repo"), "NOVAE_RUN_ROOT": str(tmp_path / "run"),
+                "NOVAE_MIN_DOMAIN_ASSIGNMENT_COVERAGE": "0.85"})
+    subprocess.run(["bash", str(script), "--render-only"], env=env, check=True, capture_output=True, text=True)
+    generated = (tmp_path / "run" / "submit_novae_skin_pilot.sbatch").read_text()
+    assert "--min-domain-assignment-coverage 0.85" in generated
+    bad = dict(env, NOVAE_MIN_DOMAIN_ASSIGNMENT_COVERAGE="1.1")
+    assert subprocess.run(["bash", str(script), "--render-only"], env=bad, capture_output=True).returncode == 2
 
 
 def test_domain_and_latent_summaries_and_nmf_preservation():
@@ -283,6 +393,7 @@ def _fake_novae(monkeypatch, late_failure=False):
             adata.layers["counts"] = adata.X.copy()
             adata.X = np.asarray(adata.X, dtype=float) / 2.0
             adata.obsm["novae_latent"] = np.ones((adata.n_obs, 2))
+            adata.obs["neighborhood_valid"] = pd.Series(True, index=adata.obs_names)
 
         def assign_domains(self, adata, *, resolution):
             calls["assign"].append(resolution)

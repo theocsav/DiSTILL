@@ -30,6 +30,10 @@ GRAPH_KEY = "spatial_connectivities"
 DISTANCE_KEY = "spatial_distances"
 DATASET_ID_RE = r"[A-Za-z0-9][A-Za-z0-9._-]*"
 DEFAULT_MODEL_REVISION = "b8c0a5d7612bac6bc719ab57ed3cd16ad814728c"
+NEIGHBORHOOD_VALID_KEY = "neighborhood_valid"
+NOVAE_NEIGHBORHOOD_VALID_KEY = NEIGHBORHOOD_VALID_KEY
+DEFAULT_DOMAIN_ASSIGNMENT_COVERAGE = 0.70
+MAX_UNASSIGNED_OBS_IDS = 10
 
 
 class NovaPilotError(ValueError):
@@ -56,7 +60,9 @@ def _canonicalize_provenance(value: Any) -> Any:
         return {
             str(key): _canonicalize_provenance(item)
             for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
-            if item is not None
+            if item is not None and not (
+                isinstance(item, (list, tuple, np.ndarray)) and len(item) == 0
+            )
         }
     if isinstance(value, (list, tuple)):
         return [_canonicalize_provenance(item) for item in value]
@@ -105,6 +111,11 @@ def _matrix_audit(matrix: Any) -> dict[str, Any]:
         integer_like = bool(np.all(np.isclose(flat, np.rint(flat), rtol=0, atol=1e-8))) if flat.size else True
     except (TypeError, ValueError) as exc:
         raise NovaPilotError("expression matrix must contain numeric values") from exc
+    if is_sparse:
+        row_totals = np.asarray(matrix.sum(axis=1)).ravel()
+    else:
+        row_totals = np.asarray(values).sum(axis=1) if values.ndim == 2 else np.array([], dtype=float)
+    zero_count_rows = int(np.count_nonzero(row_totals == 0)) if len(row_totals) else 0
     return {
         "dtype": str(values.dtype),
         "shape": {"rows": int(shape[0]), "columns": int(shape[1])},
@@ -112,6 +123,20 @@ def _matrix_audit(matrix: Any) -> dict[str, Any]:
         "min": float(flat.min()) if flat.size else None,
         "max": float(flat.max()) if flat.size else None,
         "finite": finite, "nonnegative": nonnegative, "integer_like": integer_like,
+        "zero_count_rows": zero_count_rows,
+    }
+
+
+def _zero_count_row_audit(matrix: Any, obs_names: Iterable[Any]) -> dict[str, Any]:
+    """Record zero-count rows as QC; never silently remove or replace them."""
+    values = np.asarray(matrix.sum(axis=1)).ravel() if sparse.issparse(matrix) else np.asarray(matrix).sum(axis=1)
+    indices = np.flatnonzero(values == 0)
+    names = list(obs_names)
+    return {
+        "count": int(len(indices)),
+        "obs_ids": [str(names[index]) for index in indices[:MAX_UNASSIGNED_OBS_IDS]],
+        "sample_truncated": bool(len(indices) > MAX_UNASSIGNED_OBS_IDS),
+        "note": "QC only: zero-count rows are retained and require scientific interpretation.",
     }
 
 
@@ -139,7 +164,8 @@ def expression_audit(adata: Any, expression_mode: str) -> dict[str, Any]:
     if expression_mode not in {"raw_counts", "preprocessed"}:
         raise NovaPilotError(f"unsupported expression mode: {expression_mode!r}")
     audit: dict[str, Any] = {"mode": expression_mode, "X": _matrix_audit(adata.X),
-                             "layers": {}, "raw_present": adata.raw is not None}
+                             "layers": {}, "raw_present": adata.raw is not None,
+                             "zero_count_rows": _zero_count_row_audit(adata.X, adata.obs_names)}
     for key in adata.layers.keys():
         audit["layers"][str(key)] = _matrix_audit(adata.layers[key])
     if adata.raw is not None:
@@ -189,6 +215,7 @@ def post_inference_expression_audit(
             raise NovaPilotError("NOVAE transformed raw-count X without preserving layers['counts']")
     return {
         "mode": expression_mode, "X": current, "counts": counts_audit,
+        "zero_count_rows": _zero_count_row_audit(adata.X, adata.obs_names),
         "counts_layer_present": counts is not None,
         "counts_layer_created": bool(counts is not None and not counts_before_present),
         "counts_layer_preserved": bool(counts_equal) if expression_mode == "raw_counts" else None,
@@ -399,7 +426,8 @@ def validate_spatial_graph(adata: Any, slide_key: str, graph_key: str = GRAPH_KE
         raise NovaPilotError("spatial graph must be a scipy sparse matrix")
     if graph.shape != (adata.n_obs, adata.n_obs):
         raise NovaPilotError("spatial graph shape does not match observations")
-    graph = graph.tocsr()
+    graph = graph.tocsr().copy()
+    graph.eliminate_zeros()
     slides = np.asarray([str(x) for x in adata.obs[slide_key].tolist()])
     rows, cols = graph.nonzero()
     cross = int(np.count_nonzero(slides[rows] != slides[cols]))
@@ -423,7 +451,8 @@ def prune_spatial_graph_radius(
     if not np.isfinite(scale) or scale <= 0:
         raise NovaPilotError("effective coordinate scale must be finite and positive")
     before = validate_spatial_graph(adata, slide_key, graph_key)
-    graph = adata.obsp[graph_key].tocsr()
+    graph = adata.obsp[graph_key].tocsr().copy()
+    graph.eliminate_zeros()
     distances = adata.obsp.get(distance_key)
     if distances is None:
         raise NovaPilotError(f"obsp[{distance_key!r}] is missing; corresponding distances are required")
@@ -441,6 +470,7 @@ def prune_spatial_graph_radius(
     physical_distances = np.sqrt(np.sum((coordinates[coo.row] - coordinates[coo.col]) ** 2, axis=1)) * scale
     keep = physical_distances <= radius
     pruned = sparse.csr_matrix((coo.data[keep], (coo.row[keep], coo.col[keep])), shape=graph.shape)
+    pruned.eliminate_zeros()
     keep_mask = sparse.csr_matrix(
         (np.ones(int(keep.sum()), dtype=np.int8), (coo.row[keep], coo.col[keep])), shape=graph.shape
     )
@@ -452,7 +482,9 @@ def prune_spatial_graph_radius(
         before_sub = graph[indices][:, indices]
         after_sub = pruned[indices][:, indices]
         before_undirected = before_sub.maximum(before_sub.T).tocsr()
+        before_undirected.eliminate_zeros()
         after_undirected = after_sub.maximum(after_sub.T).tocsr()
+        after_undirected.eliminate_zeros()
         before_edges = int(len(_edge_pairs(sparse.triu(before_undirected, k=1))[0]))
         after_edges = int(len(_edge_pairs(sparse.triu(after_undirected, k=1))[0]))
         if len(indices) > 1 and before_edges > 0 and after_edges == 0:
@@ -465,6 +497,8 @@ def prune_spatial_graph_radius(
             "removed_directed_edges": int(before_sub.nnz - after_sub.nnz),
             "pre_undirected_edges": before_edges, "post_undirected_edges": after_edges,
             "removed_undirected_edges": int(before_edges - after_edges),
+            "pre_zero_degree_count": int(np.count_nonzero(np.asarray(before_undirected.getnnz(axis=1)).ravel() == 0)),
+            "post_zero_degree_count": int(np.count_nonzero(np.asarray(after_undirected.getnnz(axis=1)).ravel() == 0)),
         })
     adata.obsp[graph_key] = pruned
     adata.obsp[distance_key] = pruned_distances
@@ -481,6 +515,8 @@ def prune_spatial_graph_radius(
         "pre_undirected_edges": int(pre_undirected_edges),
         "post_undirected_edges": int(post_undirected_edges),
         "removed_undirected_edges": int(pre_undirected_edges - post_undirected_edges),
+        "pre_zero_degree_count": int(sum(row["pre_zero_degree_count"] for row in per_slide)),
+        "post_zero_degree_count": int(sum(row["post_zero_degree_count"] for row in per_slide)),
         "per_slide": per_slide,
     }
 
@@ -495,7 +531,8 @@ def graph_diagnostics(adata: Any, slide_key: str, graph_key: str = GRAPH_KEY,
                       distance_key: str = DISTANCE_KEY) -> pd.DataFrame:
     """Return per-slide directed/undirected, degree, component, and distance metrics."""
     validate_spatial_graph(adata, slide_key, graph_key)
-    graph = adata.obsp[graph_key].tocsr()
+    graph = adata.obsp[graph_key].tocsr().copy()
+    graph.eliminate_zeros()
     distances = adata.obsp.get(distance_key)
     if distances is not None and not sparse.issparse(distances):
         distances = sparse.csr_matrix(distances)
@@ -505,6 +542,7 @@ def graph_diagnostics(adata: Any, slide_key: str, graph_key: str = GRAPH_KEY,
         indices = np.flatnonzero(slides == slide)
         sub = graph[indices][:, indices]
         undirected = sub.maximum(sub.T).tocsr()
+        undirected.eliminate_zeros()
         pair_rows, pair_cols = _edge_pairs(undirected)
         degrees = np.asarray(undirected.getnnz(axis=1)).ravel()
         record: dict[str, Any] = {
@@ -513,6 +551,7 @@ def graph_diagnostics(adata: Any, slide_key: str, graph_key: str = GRAPH_KEY,
             "mean_degree": float(degrees.mean()) if len(degrees) else 0.0,
             "min_degree": int(degrees.min()) if len(degrees) else 0,
             "max_degree": int(degrees.max()) if len(degrees) else 0,
+            "zero_degree_count": int(np.count_nonzero(degrees == 0)),
             "connected_components": int(connected_components(sub, directed=False, return_labels=False)) if len(indices) else 0,
             "cross_slide_violation_count": 0,
             "distance_count": 0, "distance_min": np.nan,
@@ -532,33 +571,158 @@ def graph_diagnostics(adata: Any, slide_key: str, graph_key: str = GRAPH_KEY,
     return pd.DataFrame(rows)
 
 
+def _domain_assigned_mask(values: Iterable[Any]) -> np.ndarray:
+    """Identify real labels without converting missing values to the string ``nan``."""
+    mask: list[bool] = []
+    for value in values:
+        if _is_missing(value):
+            mask.append(False)
+            continue
+        text = str(value).strip()
+        mask.append(bool(text) and text.lower() != "nan")
+    return np.asarray(mask, dtype=bool)
+
+
+def _neighborhood_valid_mask(adata: Any, key: str = NEIGHBORHOOD_VALID_KEY) -> np.ndarray:
+    if key not in adata.obs:
+        raise NovaPilotError(f"NOVAE did not produce expected {key!r} column")
+    values = adata.obs[key].tolist()
+    mask: list[bool] = []
+    for value in values:
+        if _is_missing(value) or not isinstance(value, (bool, np.bool_)):
+            raise NovaPilotError(f"{key!r} must contain only non-missing boolean values")
+        mask.append(bool(value))
+    return np.asarray(mask, dtype=bool)
+
+
+def audit_domain_assignments(
+    adata: Any, slide_key: str, domain_key: str,
+    minimum_coverage: float = DEFAULT_DOMAIN_ASSIGNMENT_COVERAGE,
+    *, neighborhood_key: str = NEIGHBORHOOD_VALID_KEY,
+) -> dict[str, Any]:
+    """Audit NOVAE labels against its explicit valid-neighborhood mask."""
+    if slide_key not in adata.obs:
+        raise NovaPilotError(f"grouping key {slide_key!r} is missing")
+    if domain_key not in adata.obs:
+        raise NovaPilotError(f"NOVAE did not produce expected domain key {domain_key!r}")
+    try:
+        threshold = float(minimum_coverage)
+    except (TypeError, ValueError) as exc:
+        raise NovaPilotError("minimum domain-assignment coverage must be numeric") from exc
+    if not np.isfinite(threshold) or threshold < 0 or threshold > 1:
+        raise NovaPilotError("minimum domain-assignment coverage must be in [0, 1]")
+    valid = _neighborhood_valid_mask(adata, neighborhood_key)
+    domains = adata.obs[domain_key].tolist()
+    assigned = _domain_assigned_mask(domains)
+    # A valid neighborhood must always have a genuine domain. Invalid rows are
+    # expected to retain NOVAE's missing value (and are never imputed).
+    invalid_valid = np.flatnonzero(valid & ~assigned)
+    invalid_domain = np.flatnonzero(~valid & assigned)
+    if len(invalid_valid):
+        ids = [str(adata.obs_names[index]) for index in invalid_valid[:MAX_UNASSIGNED_OBS_IDS]]
+        raise NovaPilotError(
+            f"domain key {domain_key!r} is missing for {len(invalid_valid)} valid neighborhoods; "
+            f"sample obs IDs={ids}"
+        )
+    if len(invalid_domain):
+        ids = [str(adata.obs_names[index]) for index in invalid_domain[:MAX_UNASSIGNED_OBS_IDS]]
+        raise NovaPilotError(
+            f"domain key {domain_key!r} assigns {len(invalid_domain)} invalid neighborhoods; "
+            f"sample obs IDs={ids}"
+        )
+    slides = adata.obs[slide_key].astype(str).to_numpy()
+    def counts(indices: np.ndarray) -> dict[str, Any]:
+        total = int(len(indices))
+        valid_count = int(valid[indices].sum())
+        assigned_count = int(assigned[indices].sum())
+        unassigned_count = total - assigned_count
+        coverage = assigned_count / total if total else 0.0
+        unassigned_indices = indices[~assigned[indices]]
+        return {
+            "total": total, "valid_neighborhood": valid_count,
+            "assigned": assigned_count, "unassigned": unassigned_count,
+            "coverage": coverage,
+            "total_observations": total, "valid_neighborhood_observations": valid_count,
+            "assigned_observations": assigned_count, "unassigned_observations": unassigned_count,
+            "assignment_coverage": coverage,
+            "unassigned_obs_ids": [str(adata.obs_names[index]) for index in unassigned_indices[:MAX_UNASSIGNED_OBS_IDS]],
+            "unassigned_obs_ids_truncated": bool(len(unassigned_indices) > MAX_UNASSIGNED_OBS_IDS),
+            "meets_minimum_coverage": bool(coverage >= threshold),
+        }
+    overall = counts(np.arange(adata.n_obs))
+    per_slide = {slide: counts(np.flatnonzero(slides == slide)) for slide in sorted(set(slides))}
+    failing_slides = {
+        slide: values for slide, values in per_slide.items()
+        if values["coverage"] < threshold
+    }
+    if failing_slides or overall["coverage"] < threshold:
+        slide_details = "; ".join(
+            f"{slide}: total={values['total']}, valid_neighborhood={values['valid_neighborhood']}, "
+            f"assigned={values['assigned']}, unassigned={values['unassigned']}, "
+            f"coverage={values['coverage']:.4f}, minimum={threshold:.4f}, "
+            f"sample obs IDs={values['unassigned_obs_ids']}"
+            for slide, values in failing_slides.items()
+        ) or "none"
+        overall_detail = (
+            f"total={overall['total']}, valid_neighborhood={overall['valid_neighborhood']}, "
+            f"assigned={overall['assigned']}, unassigned={overall['unassigned']}, "
+            f"coverage={overall['coverage']:.4f}, minimum={threshold:.4f}, "
+            f"sample obs IDs={overall['unassigned_obs_ids']}"
+        )
+        raise NovaPilotError(
+            f"domain assignment coverage below minimum for {domain_key!r}; "
+            f"failing slides: {slide_details}; overall: {overall_detail}"
+        )
+    return {"domain_key": domain_key, "neighborhood_key": neighborhood_key,
+            "minimum_coverage": threshold,
+            "minimum_domain_assignment_coverage": threshold,
+            "overall": overall, "per_slide": per_slide}
+
+
 def domain_adjacency(adata: Any, slide_key: str, domain_key: str,
                      graph_key: str = GRAPH_KEY) -> pd.DataFrame:
-    """Count each undirected graph edge once and normalize within each slide."""
+    """Count labeled undirected edges, excluding edges touching unassigned rows."""
     if domain_key not in adata.obs:
         raise NovaPilotError(f"domain key {domain_key!r} is missing")
     validate_spatial_graph(adata, slide_key, graph_key)
-    graph = adata.obsp[graph_key].tocsr()
+    graph = adata.obsp[graph_key].tocsr().copy()
+    graph.eliminate_zeros()
     slides = np.asarray([str(x) for x in adata.obs[slide_key].tolist()])
-    domains = np.asarray([str(x) if not _is_missing(x) else "" for x in adata.obs[domain_key]])
+    domains = adata.obs[domain_key].tolist()
+    assigned = _domain_assigned_mask(domains)
     rows, cols = _edge_pairs(sparse.triu(graph.maximum(graph.T), k=1))
-    # maximum makes asymmetric directed input defensively undirected for this table.
-    if len(rows) == 0:
-        return pd.DataFrame(columns=["slide", "domain_a", "domain_b", "edge_count", "edge_proportion"])
+    totals = {slide: 0 for slide in sorted(set(slides))}
+    used = {slide: 0 for slide in totals}
     counts: dict[tuple[str, str, str], int] = {}
-    totals: dict[str, int] = {}
     for left, right in zip(rows, cols):
         if slides[left] != slides[right]:
             raise NovaPilotError("cross-slide edge encountered while building adjacency")
-        a, b = sorted((domains[left], domains[right]))
-        key = (slides[left], a, b)
+        slide = slides[left]
+        totals[slide] += 1
+        if not (assigned[left] and assigned[right]):
+            continue
+        used[slide] += 1
+        a, b = sorted((str(domains[left]).strip(), str(domains[right]).strip()))
+        key = (slide, a, b)
         counts[key] = counts.get(key, 0) + 1
-        totals[slides[left]] = totals.get(slides[left], 0) + 1
-    result = [{"slide": slide, "domain_a": a, "domain_b": b,
-               "edge_count": count, "edge_proportion": count / totals[slide],
-               "proportion": count / totals[slide]}
-              for (slide, a, b), count in sorted(counts.items())]
-    return pd.DataFrame(result)
+    records: list[dict[str, Any]] = []
+    for slide in sorted(totals):
+        slide_counts = [(key, count) for key, count in counts.items() if key[0] == slide]
+        if not slide_counts:
+            slide_counts = [((slide, "", ""), 0)]
+        for (_, a, b), count in sorted(slide_counts):
+            total_edges, used_edges = totals[slide], used[slide]
+            records.append({
+                "slide": slide, "domain_a": a, "domain_b": b, "edge_count": count,
+                "edge_proportion": count / used_edges if used_edges else 0.0,
+                "proportion": count / used_edges if used_edges else 0.0,
+                "total_edges": total_edges, "used_edges": used_edges,
+                "excluded_edges": total_edges - used_edges,
+                "edge_coverage": used_edges / total_edges if total_edges else 0.0,
+                "total": total_edges, "used": used_edges,
+                "excluded": total_edges - used_edges, "coverage": used_edges / total_edges if total_edges else 0.0,
+            })
+    return pd.DataFrame(records)
 
 
 def domain_proportions(adata: Any, unit_key: str, domain_key: str) -> pd.DataFrame:
@@ -566,21 +730,45 @@ def domain_proportions(adata: Any, unit_key: str, domain_key: str) -> pd.DataFra
         raise NovaPilotError(f"grouping key {unit_key!r} is missing")
     if domain_key not in adata.obs:
         raise NovaPilotError(f"domain key {domain_key!r} is missing")
-    frame = pd.DataFrame({unit_key: adata.obs[unit_key].astype(str).to_numpy(),
-                          "domain": adata.obs[domain_key].astype(str).to_numpy()})
-    result = frame.groupby([unit_key, "domain"], sort=True, observed=True).size().reset_index(name="obs")
-    result["proportion"] = result["obs"] / result.groupby(unit_key)["obs"].transform("sum")
-    return result
+    units = adata.obs[unit_key].astype(str).to_numpy()
+    domains = adata.obs[domain_key].tolist()
+    assigned = _domain_assigned_mask(domains)
+    totals = pd.Series(units).value_counts().to_dict()
+    assigned_counts = pd.Series(units[assigned]).value_counts().to_dict()
+    records: list[dict[str, Any]] = []
+    for unit in sorted(totals):
+        total = int(totals[unit]); assigned_count = int(assigned_counts.get(unit, 0))
+        audit = {"total": total, "assigned": assigned_count, "unassigned": total - assigned_count,
+                 "coverage": assigned_count / total if total else 0.0}
+        labels = pd.Series([str(domains[index]).strip() for index in np.flatnonzero((units == unit) & assigned)])
+        counts = labels.value_counts(sort=True)
+        for domain, count in counts.items():
+            records.append({"domain": domain, "obs": int(count),
+                            "proportion": count / assigned_count if assigned_count else 0.0,
+                            "total": audit["total"], "assigned": audit["assigned"],
+                            "unassigned": audit["unassigned"], "coverage": audit["coverage"],
+                            "total_observations": audit["total"], "assigned_observations": audit["assigned"],
+                            "unassigned_observations": audit["unassigned"], "assignment_coverage": audit["coverage"],
+                            unit_key: unit})
+        if not len(counts):
+            records.append({"domain": "", "obs": 0, "proportion": 0.0,
+                            "total": audit["total"], "assigned": 0,
+                            "unassigned": audit["unassigned"], "coverage": audit["coverage"],
+                            "total_observations": audit["total"], "assigned_observations": 0,
+                            "unassigned_observations": audit["unassigned"], "assignment_coverage": audit["coverage"],
+                            unit_key: unit})
+    return pd.DataFrame(records)
 
 
 def latent_summary(adata: Any, slide_key: str, latent_key: str,
                    group_key: str | None = None) -> pd.DataFrame:
-    """Summarize every latent dimension with mean and population standard deviation."""
+    """Summarize finite latents over valid NOVAE neighborhoods only."""
     if latent_key not in adata.obsm:
         raise NovaPilotError(f"latent key {latent_key!r} is missing")
     latent = np.asarray(adata.obsm[latent_key], dtype=float)
     if latent.ndim != 2 or latent.shape[0] != adata.n_obs or not np.isfinite(latent).all():
         raise NovaPilotError("latent representation must be finite, 2-D, and row-aligned")
+    valid = _neighborhood_valid_mask(adata)
     keys = [slide_key] + ([group_key] if group_key else [])
     labels = pd.DataFrame({key: adata.obs[key].astype(str).to_numpy() for key in keys})
     labels["_row"] = np.arange(adata.n_obs)
@@ -588,12 +776,18 @@ def latent_summary(adata: Any, slide_key: str, latent_key: str,
     for values, index in labels.groupby(keys, sort=True, observed=True):
         if not isinstance(values, tuple):
             values = (values,)
-        matrix = latent[index["_row"].to_numpy()]
+        all_unit_indices = index["_row"].to_numpy()
+        unit_indices = all_unit_indices[valid[all_unit_indices]]
+        matrix = latent[unit_indices]
         record = {key: value for key, value in zip(keys, values)}
-        record["obs"] = int(len(matrix))
+        record.update({"obs": int(len(matrix)), "total": int(len(all_unit_indices)),
+                       "valid": int(len(unit_indices)), "excluded": int(len(all_unit_indices) - len(unit_indices)),
+                       "total_observations": int(len(all_unit_indices)),
+                       "valid_neighborhood_observations": int(len(unit_indices)),
+                       "excluded_observations": int(len(all_unit_indices) - len(unit_indices))})
         for dimension in range(latent.shape[1]):
-            record[f"latent_{dimension}_mean"] = float(matrix[:, dimension].mean())
-            record[f"latent_{dimension}_std"] = float(matrix[:, dimension].std(ddof=0))
+            record[f"latent_{dimension}_mean"] = float(matrix[:, dimension].mean()) if len(matrix) else np.nan
+            record[f"latent_{dimension}_std"] = float(matrix[:, dimension].std(ddof=0)) if len(matrix) else np.nan
         output.append(record)
     return pd.DataFrame(output)
 
@@ -653,6 +847,7 @@ def neighbor_distance_calibration(
         raise NovaPilotError("spatial distances shape does not match observations")
     distances = distances.tocsr().maximum(distances.T).tocsr()
     graph = adata.obsp[graph_key].tocsr().maximum(adata.obsp[graph_key].T).tocsr()
+    graph.eliminate_zeros()
     slides = np.asarray([str(x) for x in adata.obs[slide_key].tolist()])
     lower, upper = expected * (1 - tolerance), expected * (1 + tolerance)
     records: list[dict[str, Any]] = []
@@ -695,30 +890,64 @@ def _science_metrics(novae: Any, adata: Any, slide_key: str, domain_key: str) ->
             "monitor.jensen_shannon_divergence; refusing a substitute metric"
         )
     try:
-        return {
+        result = {
             "FIDE": float(fide(adata, obs_key=domain_key, slide_key=slide_key)),
             "JSD": float(jsd(adata, obs_key=domain_key, slide_key=slide_key)),
         }
     except Exception as exc:
         raise NovaPilotError(f"NOVAE official metric API failed for {domain_key!r}: {exc}") from exc
+    nonfinite = [name for name, value in result.items() if not np.isfinite(value)]
+    if nonfinite:
+        raise NovaPilotError(
+            f"NOVAE official FIDE/JSD returned non-finite {', '.join(nonfinite)} "
+            f"for {domain_key!r}: {result}"
+        )
+    return result
 
 
-def _domain_resolution_summary(adata: Any, slide_key: str, resolutions: list[float], domain_keys: Mapping[float, str], primary_resolution: float) -> pd.DataFrame:
+def _domain_resolution_summary(
+    adata: Any, slide_key: str, resolutions: list[float],
+    domain_keys: Mapping[float, str], primary_resolution: float,
+    assignment_audits: Mapping[float, Mapping[str, Any]] | None = None,
+) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
-    slides = adata.obs[slide_key].astype(str)
+    slides = adata.obs[slide_key].astype(str).to_numpy()
     for resolution in resolutions:
         key = domain_keys[resolution]
-        raw_values = adata.obs[key]
-        assigned = int(raw_values.notna().sum())
-        values = raw_values.astype(str)
-        sizes = values.value_counts(sort=False)
-        per_slide = [f"{slide}:{values[slides == slide].nunique()}" for slide in sorted(slides.unique())]
+        raw_values = adata.obs[key].tolist()
+        assigned_mask = _domain_assigned_mask(raw_values)
+        values = np.asarray([str(value).strip() if assigned_mask[index] else "" for index, value in enumerate(raw_values)])
+        assigned_values = values[assigned_mask]
+        sizes = pd.Series(assigned_values).value_counts(sort=False)
+        audit = assignment_audits[resolution] if assignment_audits else None
+        overall = audit["overall"] if audit else {
+            "total": int(adata.n_obs), "valid_neighborhood": int(assigned_mask.sum()),
+            "assigned": int(assigned_mask.sum()), "unassigned": int((~assigned_mask).sum()),
+            "coverage": float(assigned_mask.mean()) if len(assigned_mask) else 0.0,
+        }
+        per_slide = []
+        for slide in sorted(set(slides)):
+            slide_mask = (slides == slide) & assigned_mask
+            per_slide.append(f"{slide}:{int(pd.Series(values[slide_mask]).nunique())}")
         rows.append({
             "resolution": resolution, "primary": bool(np.isclose(resolution, primary_resolution, rtol=0, atol=1e-12)),
-            "domain_key": key, "number_of_domains": int(values.nunique()),
-            "assigned_observations": assigned,
-            "minimum_domain_size": int(sizes.min()), "median_domain_size": float(sizes.median()),
-            "maximum_domain_size": int(sizes.max()), "domains_present_per_slide": ";".join(per_slide),
+            "domain_key": key, "number_of_domains": int(pd.Series(assigned_values).nunique()),
+            "total_observations": overall["total"], "valid_neighborhood_observations": overall["valid_neighborhood"],
+            "assigned_observations": overall["assigned"], "unassigned_observations": overall["unassigned"],
+            "assignment_coverage": overall["coverage"],
+            "total": overall["total"], "valid_neighborhood": overall["valid_neighborhood"],
+            "assigned": overall["assigned"], "unassigned": overall["unassigned"], "coverage": overall["coverage"],
+            "minimum_domain_size": int(sizes.min()) if len(sizes) else 0,
+            "median_domain_size": float(sizes.median()) if len(sizes) else 0.0,
+            "maximum_domain_size": int(sizes.max()) if len(sizes) else 0,
+            "domains_present_per_slide": ";".join(per_slide),
+            "unassigned_obs_ids": ";".join(overall.get("unassigned_obs_ids", [])),
+            "assignment_audit_per_slide": json.dumps(audit.get("per_slide", {}) if audit else {}, sort_keys=True),
+            "per_slide_total": json.dumps({slide: values["total"] for slide, values in (audit.get("per_slide", {}) if audit else {}).items()}, sort_keys=True),
+            "per_slide_valid_neighborhood": json.dumps({slide: values["valid_neighborhood"] for slide, values in (audit.get("per_slide", {}) if audit else {}).items()}, sort_keys=True),
+            "per_slide_assigned": json.dumps({slide: values["assigned"] for slide, values in (audit.get("per_slide", {}) if audit else {}).items()}, sort_keys=True),
+            "per_slide_unassigned": json.dumps({slide: values["unassigned"] for slide, values in (audit.get("per_slide", {}) if audit else {}).items()}, sort_keys=True),
+            "per_slide_coverage": json.dumps({slide: values["coverage"] for slide, values in (audit.get("per_slide", {}) if audit else {}).items()}, sort_keys=True),
         })
     return pd.DataFrame(rows)
 
@@ -726,17 +955,13 @@ def _domain_resolution_summary(adata: Any, slide_key: str, resolutions: list[flo
 def _validate_domain_column(adata: Any, domain_key: str) -> None:
     if domain_key not in adata.obs:
         raise NovaPilotError(f"NOVAE did not produce expected domain key {domain_key!r}")
-    domains = adata.obs[domain_key]
-    if domains.isna().any() or (domains.astype(str).str.len() == 0).any():
-        raise NovaPilotError(f"NOVAE domain assignments are incomplete for {domain_key!r}")
+    # Detailed validity/coverage checks are performed after each assignment.
 
 
 def _validate_inference_outputs(adata: Any, domain_key: str) -> int:
     if domain_key not in adata.obs:
         raise NovaPilotError(f"NOVAE did not produce expected domain key {domain_key!r}")
-    domains = adata.obs[domain_key]
-    if domains.isna().any() or (domains.astype(str).str.len() == 0).any():
-        raise NovaPilotError("NOVAE domain assignments are incomplete")
+    _neighborhood_valid_mask(adata)
     candidates = [key for key in adata.obsm.keys() if key == "novae_latent" or key.startswith("novae_latent")]
     if not candidates:
         raise NovaPilotError("NOVAE did not produce a latent representation")
@@ -948,6 +1173,9 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Allowed relative deviation of each slide median distance (default: 0.5).")
     parser.add_argument("--graph-radius-um", type=float, default=None,
                         help="Optional positive physical radius for post-construction Visium graph pruning.")
+    parser.add_argument("--min-domain-assignment-coverage", type=float,
+                        default=DEFAULT_DOMAIN_ASSIGNMENT_COVERAGE,
+                        help="Minimum NOVAE domain assignment coverage overall and per slide (default: 0.70).")
     parser.add_argument("--accelerator", default="cpu")
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
@@ -986,6 +1214,13 @@ def _run_impl(args: argparse.Namespace) -> int:
         if not np.isfinite(graph_radius_um) or graph_radius_um <= 0:
             raise NovaPilotError("graph radius must be finite and positive")
     args.graph_radius_um = graph_radius_um
+    try:
+        min_coverage = float(args.min_domain_assignment_coverage)
+    except (TypeError, ValueError) as exc:
+        raise NovaPilotError("minimum domain-assignment coverage must be numeric") from exc
+    if not np.isfinite(min_coverage) or min_coverage < 0 or min_coverage > 1:
+        raise NovaPilotError("minimum domain-assignment coverage must be in [0, 1]")
+    args.min_domain_assignment_coverage = min_coverage
     args.resolutions = resolutions
     args.primary_resolution = primary_resolution
     if args.coordinate_strategy == "shared_scalar":
@@ -1059,6 +1294,8 @@ def _run_impl(args: argparse.Namespace) -> int:
             "coordinate_input_unit": "microns" if args.coordinate_strategy == "materialized_microns" else "pixels",
             "coordinate_target_unit": "microns", "effective_novae_scale_to_microns": effective_scale,
             "coordinate_audit_per_slide": coordinate_audit.to_dict(orient="records"),
+            "neighborhood_valid_key": NEIGHBORHOOD_VALID_KEY,
+            "minimum_domain_assignment_coverage": args.min_domain_assignment_coverage,
             "sample_manifest": str(args.sample_manifest) if args.sample_manifest else None,
             "sample_manifest_sha256": manifest_hash,
             "expression_mode": args.expression_mode,
@@ -1151,9 +1388,11 @@ def _run_impl(args: argparse.Namespace) -> int:
     latent_key = next((key for key in adata.obsm.keys() if key == "novae_latent" or key.startswith("novae_latent")), None)
     if latent_key is None:
         raise NovaPilotError("NOVAE did not produce a latent representation")
+    _neighborhood_valid_mask(adata)
     latent_dim = int(np.asarray(adata.obsm[latent_key]).shape[1])
     domain_keys: dict[float, str] = {}
     returned_domain_keys: dict[float, str] = {}
+    domain_assignment_audits: dict[float, dict[str, Any]] = {}
     metrics_rows: list[dict[str, Any]] = []
     for resolution in resolutions:
         previous_values = {key: adata.obs[key].copy() for key in domain_keys.values() if key in adata.obs}
@@ -1169,8 +1408,12 @@ def _run_impl(args: argparse.Namespace) -> int:
             domain_key = f"novae_domains_res{resolution}"
             adata.obs[domain_key] = current_values
         _validate_domain_column(adata, domain_key)
+        assignment_audit = audit_domain_assignments(
+            adata, args.slide_key, domain_key, args.min_domain_assignment_coverage,
+        )
         domain_keys[resolution] = domain_key
         returned_domain_keys[resolution] = returned_key
+        domain_assignment_audits[resolution] = assignment_audit
         metric_values = _science_metrics(novae, adata, args.slide_key, domain_key)
         metrics_rows.append({"resolution": resolution, "primary": bool(np.isclose(resolution, primary_resolution, rtol=0, atol=1e-12)),
                              "domain_key": domain_key, **metric_values,
@@ -1191,7 +1434,10 @@ def _run_impl(args: argparse.Namespace) -> int:
     # intentionally computed once, not once per resolution.
     latent = latent_summary(adata, args.slide_key, latent_key)
     group_latent = latent_summary(adata, args.group_key, latent_key) if args.group_key else None
-    domain_summary = _domain_resolution_summary(adata, args.slide_key, resolutions, domain_keys, primary_resolution)
+    domain_summary = _domain_resolution_summary(
+        adata, args.slide_key, resolutions, domain_keys, primary_resolution,
+        domain_assignment_audits,
+    )
     if list(adata.obs_names) != list(source_obs) or list(adata.var_names) != list(source_vars):
         raise NovaPilotError("NOVAE changed source observation or variable order")
     assert_nmf_unchanged(adata, snapshot)
@@ -1259,6 +1505,11 @@ def _run_impl(args: argparse.Namespace) -> int:
         "accelerator": args.accelerator, "device": _runtime_device(args.accelerator), "workers": args.workers, "seed": args.seed,
         "requested_resolutions": {resolution_token(value): value for value in resolutions},
         "primary_resolution": primary_resolution,
+        "neighborhood_valid_key": NEIGHBORHOOD_VALID_KEY,
+        "minimum_domain_assignment_coverage": args.min_domain_assignment_coverage,
+        "domain_assignment_audits": {
+            resolution_token(resolution): audit for resolution, audit in domain_assignment_audits.items()
+        },
         "primary_resolution_is_predeclared": True, "domain_keys": {str(k): v for k, v in domain_keys.items()},
         "returned_domain_keys": {str(k): v for k, v in returned_domain_keys.items()},
         "representation_computation_count": 1, "latent_key": latent_key, "latent_dimension": latent_dim,
@@ -1364,6 +1615,9 @@ compute_neighbor_distance_qc = neighbor_distance_calibration
 prune_graph_radius = prune_spatial_graph_radius
 compute_domain_adjacency = domain_adjacency
 compute_domain_proportions = domain_proportions
+audit_novae_domains = audit_domain_assignments
+domain_assignment_audit = audit_domain_assignments
+validate_domain_assignments = audit_domain_assignments
 summarize_latents = latent_summary
 
 

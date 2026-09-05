@@ -9,6 +9,40 @@ CPU modeling; whole-cohort domain labels remain exploratory. Use the dedicated
 NOVAE environment, not the existing Python 3.10 pipeline environment (NOVAE
 1.1.1 requires Python >=3.11).
 
+## NOVAE neighborhood validity and coverage
+
+NOVAE 1.1.1 writes the official boolean `obs['neighborhood_valid']` mask. A
+false value means the requested `n_hops_view` neighborhood is unavailable;
+NOVAE intentionally emits a zero-filled latent vector and missing (NaN)
+leaf/domain values for that observation. Missing values are expected only for
+false-mask rows: a valid neighborhood without a nonblank domain is a hard
+failure, as is a domain assigned to an invalid row. Missing values remain
+missing and are never converted to a literal `"nan"` category or imputed.
+
+Every requested resolution is audited overall and per slide, with total,
+valid-neighborhood, assigned, unassigned, coverage, and a bounded sample of
+unassigned observation IDs in the resolution summary and provenance. Coverage
+is assigned/total and must be at least **0.70** overall and for every slide by
+default (NOVAE's
+documented validity threshold). Use `--min-domain-assignment-coverage` or
+`NOVAE_MIN_DOMAIN_ASSIGNMENT_COVERAGE` to override it with a value in `[0,1]`.
+Validity is shared across resolutions, but each resolution is still audited.
+
+Domain proportions exclude unassigned observations from domain counts while
+reporting total/assigned/unassigned/coverage. Domain adjacency excludes edges
+touching unassigned observations and reports total/used/excluded edge counts and
+edge coverage. Latent summaries exclude invalid-neighborhood rows (whose zero
+vectors are not biological latent values) and report total/valid/excluded rows
+per unit. Official FIDE/JSD calls still run at every resolution with categorical
+missing values intact as needed. If coverage is below threshold, inspect the
+slide-level audit, coordinate/graph construction, tissue extent, and input QC
+before resubmitting; never fill labels or silently filter rows.
+
+Expression audits report zero-count rows, which are retained as QC requiring
+scientific interpretation rather than auto-filtered. Graph diagnostics report
+zero-degree observations, and radius-pruning provenance records pre/post
+zero-degree counts.
+
 ## Create the environment
 
 Environment creation and model caching are one-time setup (not scheduled
@@ -132,6 +166,7 @@ export NOVAE_RESOLUTIONS="0.5 1.0 2.0" # label-free; 1.0 is primary
 export NOVAE_PRIMARY_RESOLUTION=1.0
 export NOVAE_EXPECTED_NEIGHBOR_DISTANCE_UM=100
 export NOVAE_GRAPH_RADIUS_UM=100 # validated and passed to the pilot
+export NOVAE_MIN_DOMAIN_ASSIGNMENT_COVERAGE=0.70
 export NOVAE_WORKERS=8
 scripts/submit_novae_skin_pilot.sh
 ```
@@ -141,7 +176,8 @@ per-sample jobs. All resolution assignments, domain/QC tables, and latent
 summaries come from this one encoder/representation computation. Useful
 overrides include `NOVAE_INPUT_H5AD`, `NOVAE_SAMPLE_MANIFEST`,
 `NOVAE_CONDA_ENV`, `NOVAE_OUTPUT_DIR`, `NOVAE_QOS`, `NOVAE_PARTITION`,
-`NOVAE_TIME`, `NOVAE_MODEL_REVISION`, and `NOVAE_DATASET_ID`. The default input
+`NOVAE_TIME`, `NOVAE_MODEL_REVISION`, `NOVAE_MIN_DOMAIN_ASSIGNMENT_COVERAGE`,
+and `NOVAE_DATASET_ID`. The default input
 is the original-sections `skin_visium_ssc_spatial.h5ad`, not a pseudo-FOV
 artifact. The launcher requests one GPU, 8 CPUs, about 96 GB RAM, and the
 current `kejun.huang` GPU QOS; no partition is assumed unless
