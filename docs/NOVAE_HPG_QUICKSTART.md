@@ -1,5 +1,9 @@
 # NOVAE skin Visium pilot on UF HiPerGator
 
+**Completed run:** [NOVAE skin pilot run report](NOVAE_SKIN_PILOT_RUN_2026-09-06.md)
+(records HPG jobs 41152531, 41197867, and successful 41213616, QC, calibration
+limits, and artifact-inspection commands).
+
 This is a standalone **exploratory Phase 0/1** branch. It is not a
 `run_pipeline.py` stage and its `reference=all` domains must not be used for
 confirmatory held-out classification. The scientific claim is exploratory

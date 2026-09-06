@@ -1,6 +1,6 @@
 # NOVAE integration plan
 
-**Status:** standalone Phase 0/1 implementation exists and is under validation. The pilot now includes explicit expression-mode auditing, transactional branch artifacts, and a pinned provenance envelope. It is intentionally parallel to the production pipeline; runner/API/UI and confirmatory fold-safe integration remain out of scope.
+**Status:** standalone Phase 0/1 implementation exists and is under validation. The pilot now includes explicit expression-mode auditing, transactional branch artifacts, and a pinned provenance envelope. It is intentionally parallel to the production pipeline; runner/API/UI and confirmatory fold-safe integration remain out of scope. See the [completed skin pilot run report](NOVAE_SKIN_PILOT_RUN_2026-09-06.md) for HPG outcomes and calibration limits.
 
 ## Decision and boundary
 
