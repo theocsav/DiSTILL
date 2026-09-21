@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+import scripts.audit_final_headline_runs as audit_module
 from scripts.audit_final_headline_runs import AuditError, _parse_mlp_metadata, inspect_predictions, inspect_run, validate_source_metadata
 
 
@@ -175,6 +176,26 @@ def test_render_rejects_whitespace_in_scheduler_values(tmp_path: Path, variable:
     result = subprocess.run(["scripts/submit_final_headline_runs_audit.sh", "--render-only"], env=env, text=True, capture_output=True)
     assert result.returncode == 2
     assert "whitespace" in result.stderr
+
+
+def test_run_audit_publishes_transactionally(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def fake_source(path: Path, *, label: str, **kwargs: object) -> dict[str, object]:
+        result: dict[str, object] = {"label": label, "path": str(path), "shape": [10, 4], "backed_read_only": True, "obs_columns": []}
+        if label != "kidney_reference":
+            result["metadata"] = {"n_patients": 14 if label == "skin" else 6, "n_fovs": 20}
+        return result
+
+    def fake_run(path: Path, *, name: str, expected_folds: int) -> dict[str, object]:
+        return {"name": name, "run_dir": str(path), "exists": True, "technical_artifact_consistency": True, "scientific_citability": "test", "artifacts": {"mlp_outputs": []}, "nested_cv": []}
+
+    monkeypatch.setattr(audit_module, "inspect_h5ad", fake_source)
+    monkeypatch.setattr(audit_module, "inspect_run", fake_run)
+    monkeypatch.setattr(audit_module, "_protocol_rows", lambda roots: [])
+    output = tmp_path / "audit"
+    args = audit_module.build_parser().parse_args(["--output-dir", str(output)])
+    assert audit_module.run_audit(args) == output
+    assert {path.name for path in output.iterdir()} == {"final_headline_runs_audit.json", "source_summary.csv", "run_summary.csv", "protocol_summary.csv", "fold_prediction_summary.csv"}
+    assert not list(tmp_path.glob(".audit.*.partial"))
 
 
 def test_atomic_failure_leaves_no_output(tmp_path: Path) -> None:

@@ -510,9 +510,9 @@ def run_audit(args: argparse.Namespace) -> Path:
         protocols = _protocol_rows([Path(value["run_dir"]) for value in runs.values()])
         fold_prediction_rows = []
         for run_name, run in runs.items():
-            for output in run.get("artifacts", {}).get("mlp_outputs", []):
-                if "metrics" in output:
-                    fold_prediction_rows.append({"run": run_name, "path": output["path"], **output["metrics"]})
+            for prediction_output in run.get("artifacts", {}).get("mlp_outputs", []):
+                if "metrics" in prediction_output:
+                    fold_prediction_rows.append({"run": run_name, "path": prediction_output["path"], **prediction_output["metrics"]})
         payload = {
             "scope": "read-only final/headline skin and kidney run audit",
             "technical_artifact_consistency_is_distinct_from_scientific_citability": True,
