@@ -510,7 +510,7 @@ def test_mocked_explicit_scale_end_to_end_writes_coordinates_and_provenance(tmp_
     model_path = tmp_path / "model"; model_path.mkdir(); (model_path / "weights.bin").write_bytes(b"fake")
     manifest = tmp_path / "explicit.csv"
     pd.DataFrame({"sample_id": ["A", "B"], "microns_per_pixel": [2.0, 0.5], "scale_source": ["review", "review"]}).to_csv(manifest, index=False)
-    calls = _fake_novae(monkeypatch)
+    _fake_novae(monkeypatch)
     args = _cli_args(input_path, tmp_path / "explicit-out", model_path)
     args.coordinate_strategy = "visium_explicit_scale"
     args.sample_manifest = manifest
