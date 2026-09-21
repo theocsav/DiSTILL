@@ -37,7 +37,11 @@ GRAPH_RADIUS_UM="${NOVAE_GRAPH_RADIUS_UM:-100}"
 COORDINATE_STRATEGY="${NOVAE_COORDINATE_STRATEGY:-visium_manifest}"
 OMIT_GRAPH_RADIUS_PRUNING="${NOVAE_OMIT_GRAPH_RADIUS_PRUNING:-0}"
 MIN_DOMAIN_ASSIGNMENT_COVERAGE="${NOVAE_MIN_DOMAIN_ASSIGNMENT_COVERAGE:-0.70}"
-WORKERS="${NOVAE_WORKERS:-8}"
+# Keep the worker count and scheduler allocation coupled by default. Either
+# override can provide the shared value; callers that set both must keep them
+# identical.
+CPUS_PER_TASK="${NOVAE_CPUS_PER_TASK:-${NOVAE_WORKERS:-8}}"
+WORKERS="${NOVAE_WORKERS:-${CPUS_PER_TASK}}"
 SEED="${NOVAE_SEED:-42}"
 JOB_NAME="${NOVAE_JOB_NAME:-novae_skin_pilot}"
 JOB_SCRIPT="${NOVAE_JOB_SCRIPT:-${RUN_ROOT}/submit_novae_skin_pilot.sbatch}"
@@ -120,8 +124,20 @@ RADIUS_ARGS=""
 if (( ! OMIT_GRAPH_RADIUS_PRUNING )); then
   RADIUS_ARGS="--graph-radius-um ${GRAPH_RADIUS_UM}"
 fi
-if ! [[ "${WORKERS}" =~ ^[0-9]+$ && "${SEED}" =~ ^-?[0-9]+$ ]]; then
-  echo "NOVAE_WORKERS/NOVAE_SEED must be integer values" >&2
+if ! [[ "${WORKERS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "NOVAE_WORKERS must be a positive integer" >&2
+  exit 2
+fi
+if ! [[ "${CPUS_PER_TASK}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "NOVAE_CPUS_PER_TASK must be a positive integer" >&2
+  exit 2
+fi
+if [[ "${CPUS_PER_TASK}" != "${WORKERS}" ]]; then
+  echo "NOVAE_CPUS_PER_TASK (${CPUS_PER_TASK}) must match NOVAE_WORKERS (${WORKERS})" >&2
+  exit 2
+fi
+if ! [[ "${SEED}" =~ ^-?[0-9]+$ ]]; then
+  echo "NOVAE_SEED must be an integer" >&2
   exit 2
 fi
 if [[ -n "${PARTITION}" ]]; then
@@ -152,7 +168,7 @@ cat > "${JOB_SCRIPT}" <<EOF
 #SBATCH --output=${LOG_DIR}/novae_skin_pilot_%j.out
 #SBATCH --error=${LOG_DIR}/novae_skin_pilot_%j.err
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=${CPUS_PER_TASK}
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
 #SBATCH --mem=96gb

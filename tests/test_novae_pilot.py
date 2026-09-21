@@ -598,7 +598,17 @@ def test_hpg_launcher_render_only_is_safe_and_omits_empty_partition(tmp_path):
     generated = (tmp_path / "run" / "submit_novae_skin_pilot.sbatch").read_text()
     assert "#SBATCH --qos=kejun.huang" in generated
     assert "#SBATCH --partition=" not in generated
+    assert "#SBATCH --cpus-per-task=8" in generated
     assert "--graph-radius-um 100" in generated
+    assert "--workers 8" in generated
+    matching = dict(env, NOVAE_CPUS_PER_TASK="2", NOVAE_WORKERS="2")
+    subprocess.run(["bash", str(script), "--render-only"], env=matching, check=True, capture_output=True, text=True)
+    generated_matching = (tmp_path / "run" / "submit_novae_skin_pilot.sbatch").read_text()
+    assert "#SBATCH --cpus-per-task=2" in generated_matching and "--workers 2" in generated_matching
+    mismatch = dict(env, NOVAE_CPUS_PER_TASK="2", NOVAE_WORKERS="8")
+    assert subprocess.run(["bash", str(script), "--render-only"], env=mismatch, capture_output=True).returncode == 2
+    nonpositive = dict(env, NOVAE_CPUS_PER_TASK="0", NOVAE_WORKERS="0")
+    assert subprocess.run(["bash", str(script), "--render-only"], env=nonpositive, capture_output=True).returncode == 2
     assert not (tmp_path / "run" / "skin_visium_ssc").exists()
     assert "Rendered sbatch script" in result.stdout
 

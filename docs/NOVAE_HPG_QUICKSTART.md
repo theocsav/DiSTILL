@@ -221,6 +221,14 @@ has a distinct dataset/output identity and selects
 missing, nonfinite, or nonpositive factors, preserves
 `obsm['spatial_original_px']`, and records per-slide ranges and provenance.
 
+For the pending sensitivity, the dedicated wrapper fixes both `--cpus-per-task`
+and NOVAE `--workers` to **2**, matching the group's remaining 2 of 16 CPUs
+under its QoS allocation. This is an operational concurrency adjustment only;
+it does not change the source input, model/revision, seed, resolutions,
+coordinate/scaling protocol, or other scientific inputs. The run is
+inference-only, and its outputs remain subject to the existing fail-closed
+baseline comparison before any interpretation.
+
 The sensitivity deliberately omits explicit radius pruning. Baseline pruning
 removed zero edges, and NOVAE's canonical Visium graph construction is
 coordinate-scale-independent; omission holds graph topology fixed and avoids

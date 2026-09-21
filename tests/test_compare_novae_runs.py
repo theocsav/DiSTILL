@@ -118,8 +118,13 @@ def test_sensitivity_and_comparison_launchers_render_fixed_protocol(tmp_path):
     subprocess.run(["bash", str(sens), "--render-only"], env=env, check=True, capture_output=True, text=True)
     rendered = (tmp_path / "sens-run" / "submit_novae_nominal_100um_sensitivity.sbatch").read_text()
     assert "--coordinate-strategy visium_explicit_scale" in rendered and "--graph-radius-um" not in rendered
+    assert "#SBATCH --cpus-per-task=2" in rendered and "--workers 2" in rendered
     bad = {**env, "NOVAE_RESOLUTIONS": "0.5 1.0"}
     assert subprocess.run(["bash", str(sens), "--render-only"], env=bad, capture_output=True).returncode == 2
+    bad_workers = {**env, "NOVAE_WORKERS": "8"}
+    assert subprocess.run(["bash", str(sens), "--render-only"], env=bad_workers, capture_output=True).returncode == 2
+    bad_cpus = {**env, "NOVAE_CPUS_PER_TASK": "8"}
+    assert subprocess.run(["bash", str(sens), "--render-only"], env=bad_cpus, capture_output=True).returncode == 2
     compare = root / "scripts" / "submit_novae_comparison.sh"
     cenv = {**os.environ, "NOVAE_REPO_DIR": str(root), "NOVAE_COMPARISON_RUN_ROOT": str(tmp_path / "compare-run"),
             "NOVAE_BASELINE_H5AD": str(tmp_path / "b.h5ad"), "NOVAE_SENSITIVITY_H5AD": str(tmp_path / "s.h5ad"),
