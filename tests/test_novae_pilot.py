@@ -26,6 +26,8 @@ from scripts.run_novae_pilot import (
     domain_proportions,
     graph_diagnostics,
     harmonize_visium_coordinates,
+    harmonize_explicit_scale_coordinates,
+    validate_explicit_scale_manifest,
     latent_summary,
     post_inference_expression_audit,
     _science_metrics,
@@ -54,6 +56,28 @@ def _adata(coords=None, slides=None) -> ad.AnnData:
     result.obs["dominant_nmf_factor"] = [index % 2 for index in range(len(coords))]
     result.obs["neighborhood_valid"] = True
     return result
+
+
+def test_explicit_scale_manifest_materializes_coordinates_and_preserves_pixels():
+    data = _adata(coords=[[10, 20], [20, 20], [5, 5], [15, 5]], slides=["A", "A", "B", "B"])
+    original = data.obsm["spatial"].copy()
+    audit = harmonize_explicit_scale_coordinates(
+        data, "slide", pd.DataFrame({"sample_id": ["A", "B"], "microns_per_pixel": [2.0, 0.5], "scale_source": ["review-A", "review-B"]})
+    )
+    np.testing.assert_allclose(data.obsm["spatial_original_px"], original)
+    np.testing.assert_allclose(data.obsm["spatial"][:2], original[:2] * 2)
+    np.testing.assert_allclose(data.obsm["spatial"][2:], original[2:] * 0.5)
+    assert audit.set_index("slide").loc["B", "scale_source"] == "review-B"
+
+
+@pytest.mark.parametrize("manifest", [
+    pd.DataFrame({"sample_id": ["A", "B"], "microns_per_pixel": [1, 0]}),
+    pd.DataFrame({"sample_id": ["A", "A"], "microns_per_pixel": [1, 1]}),
+    pd.DataFrame({"sample_id": ["A", "B"], "microns_per_pixel": [1, 1], "unexpected": [1, 2]}),
+])
+def test_explicit_scale_manifest_fails_closed(manifest):
+    with pytest.raises(NovaPilotError):
+        validate_explicit_scale_manifest(manifest, ["A", "B"])
 
 
 def test_manifest_harmonization_uses_different_pixel_diameters_and_preserves_rows():
@@ -479,6 +503,33 @@ def test_mocked_end_to_end_initializes_fresh_slides_and_embedded_core_matches_ex
     assert (output_path / "novae_zero_shot_model").exists()
 
 
+def test_mocked_explicit_scale_end_to_end_writes_coordinates_and_provenance(tmp_path, monkeypatch):
+    data = _adata(coords=[[1, 2], [2, 2], [10, 4], [12, 4]], slides=["A", "A", "B", "B"])
+    data.X = np.ones((4, 2), dtype=np.int64)
+    input_path = tmp_path / "input.h5ad"; data.write_h5ad(input_path)
+    model_path = tmp_path / "model"; model_path.mkdir(); (model_path / "weights.bin").write_bytes(b"fake")
+    manifest = tmp_path / "explicit.csv"
+    pd.DataFrame({"sample_id": ["A", "B"], "microns_per_pixel": [2.0, 0.5], "scale_source": ["review", "review"]}).to_csv(manifest, index=False)
+    calls = _fake_novae(monkeypatch)
+    args = _cli_args(input_path, tmp_path / "explicit-out", model_path)
+    args.coordinate_strategy = "visium_explicit_scale"
+    args.sample_manifest = manifest
+    args.graph_radius_um = None
+    from scripts import run_novae_pilot as pilot
+    assert pilot._run(args) == 0
+    written = ad.read_h5ad(args.output_dir / "novae_synthetic_zero_shot.h5ad")
+    np.testing.assert_allclose(written.obsm["spatial_original_px"], data.obsm["spatial"])
+    np.testing.assert_allclose(written.obsm["spatial"][:2], data.obsm["spatial"][:2] * 2)
+    np.testing.assert_allclose(written.obsm["spatial"][2:], data.obsm["spatial"][2:] * 0.5)
+    envelope = json.loads((args.output_dir / "novae_provenance_synthetic.json").read_text())
+    coordinate_audit = json.loads((args.output_dir / "novae_coordinate_audit_synthetic.json").read_text())
+    assert envelope["run"]["coordinate_strategy"] == "visium_explicit_scale"
+    assert envelope["run"]["original_coordinate_obsm_key"] == "spatial_original_px"
+    assert {row["scale_source"] for row in envelope["run"]["coordinate_audit_per_slide"].values()} == {"review"}
+    assert coordinate_audit["sample_manifest"] == str(manifest)
+    assert coordinate_audit["graph_radius_pruning_applied"] is False
+
+
 @pytest.mark.parametrize("normalizer", [_canonicalize_provenance, _h5ad_safe_provenance])
 def test_provenance_normalizers_reject_mapping_key_collisions(normalizer):
     with pytest.raises(NovaPilotError, match="mapping-key collision.*1"):
@@ -525,6 +576,18 @@ def test_late_failure_removes_final_output_directory(tmp_path, monkeypatch):
         pilot._run(_cli_args(input_path, output_path, model_path))
     assert not output_path.exists()
     assert not list(tmp_path.glob(".late-out.staging-*"))
+
+
+def test_hpg_launcher_can_render_explicit_scale_without_radius(tmp_path):
+    script = Path(__file__).parents[1] / "scripts" / "submit_novae_skin_pilot.sh"
+    env = os.environ.copy()
+    env.update({"NOVAE_REPO_DIR": str(tmp_path / "repo"), "NOVAE_RUN_ROOT": str(tmp_path / "run"),
+                "NOVAE_COORDINATE_STRATEGY": "visium_explicit_scale",
+                "NOVAE_OMIT_GRAPH_RADIUS_PRUNING": "1"})
+    subprocess.run(["bash", str(script), "--render-only"], env=env, check=True, capture_output=True, text=True)
+    generated = (tmp_path / "run" / "submit_novae_skin_pilot.sbatch").read_text()
+    assert "--coordinate-strategy visium_explicit_scale" in generated
+    assert "--graph-radius-um" not in generated
 
 
 def test_hpg_launcher_render_only_is_safe_and_omits_empty_partition(tmp_path):

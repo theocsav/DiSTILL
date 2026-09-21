@@ -321,13 +321,41 @@ claim to detect missing array sites. The nominal pitch is a sensitivity
 calibration, **not independent microscope calibration**. No correction has been
 selected or applied.
 
-The raw ZIPs are local and are not on HPG. Do not upload/stage the approximately
-6 GB source set or run a real ZIP audit on an HPG login node. No command
-against the real raw set is documented or authorized yet; only synthetic ZIP
-fixtures and lightweight tests may run locally. Real source auditing waits for
-an explicit staging decision and scheduled SLURM job.
+The raw ZIPs are local and are not on HPG. Do not upload/stage the raw set or
+run a real ZIP audit on an HPG login node. The source H5AD geometry audit has
+completed on SLURM; only the approximately 6 GB raw ZIP audit/staging remains
+deferred. Synthetic ZIP fixtures and lightweight tests may run locally.
 
-The proposed output is a sensitivity candidate scales file
-(`skin_visium_nominal_sensitivity_candidate_scales.csv`) with `sample_id`, not
-an operational input manifest; it must never overwrite the original sample
-manifest.
+At the original pre-review gate, the proposed output was a non-operational
+sensitivity candidate scales file (`skin_visium_nominal_sensitivity_candidate_scales.csv`)
+with `sample_id`; it was not to overwrite the original sample manifest. The
+reviewed 42852404 factors are now separately versioned at
+`presets/novae_nominal_100um_scales.csv` for the named sensitivity only.
+
+## Predeclared nominal-100um sensitivity (pending execution)
+
+The reviewed geometry audit (job 42852404) produced 14 candidate per-slide
+factors, versioned without rounding at
+`presets/novae_nominal_100um_scales.csv`. The dedicated wrapper
+`scripts/submit_novae_nominal_100um_sensitivity.sh` retains the baseline source
+H5AD, resolved model revision, seed 42, raw counts, resolutions 0.5/1.0/2.0,
+primary 1.0, and 0.70 coverage gate, while using the distinct dataset identity
+`skin_visium_ssc_nominal_100um_sensitivity` and `visium_explicit_scale`.
+
+Baseline source H5AD is
+`/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_visium_ssc_spatial.h5ad`;
+its resolved manifest is
+`/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/novae_skin_pilot/h5ad-provenance-fix-20260906_024602/novae_resolved_manifest_skin_visium_ssc.json`.
+The geometry evidence output is `h5ad-qc-geometry-20260921_161419` from job 42852404.
+
+No explicit radius pruning is predeclared: baseline pruning removed zero edges
+and canonical NOVAE Visium graph construction is coordinate-scale-independent.
+This rationale is intended to hold topology fixed and avoid median-at-100
+rounding; it is not evidence that topologies match. The CPU-only
+`scripts/submit_novae_comparison.sh` must compare the published baseline and
+sensitivity edge sets before any topology identity is claimed. Its atomic,
+read-only report accepts only exact row/var alignment, graph identity,
+coverage >=0.70 overall/per slide, no valid missing labels, finite metrics, and
+available latent/domain/FIDE/JSD comparisons. `overall_accepted` is only the
+technical and predeclared comparison contract, not a biological domain-stability
+claim; no ARI/NMI equivalence threshold is predeclared.

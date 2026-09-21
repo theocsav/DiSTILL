@@ -443,6 +443,109 @@ def validate_manifest(manifest: pd.DataFrame, observed_slides: Iterable[Any]) ->
     return values
 
 
+def read_explicit_scale_manifest(path: str | Path) -> pd.DataFrame:
+    """Read the reviewed per-slide micron scale manifest.
+
+    Unlike the legacy ``visium_manifest`` contract, this input contains the
+    already reviewed physical factor and deliberately has no inferred diameter
+    or scalar fallback.  ``scale_source`` is the sole permitted provenance
+    column so accidental extra calibration inputs fail closed.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise NovaPilotError(f"explicit scale manifest does not exist: {path}")
+    try:
+        if path.suffix.lower() == ".json":
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(payload, Mapping):
+                payload = payload.get("scales", payload.get("manifest", payload))
+            frame = pd.DataFrame(payload)
+        else:
+            frame = pd.read_csv(path)
+    except (OSError, ValueError, TypeError) as exc:
+        raise NovaPilotError(f"could not read explicit scale manifest: {path}") from exc
+    return frame
+
+
+def validate_explicit_scale_manifest(
+    manifest: pd.DataFrame, observed_slides: Iterable[Any]
+) -> dict[str, dict[str, Any]]:
+    """Validate one finite positive explicit scale for exactly every slide."""
+    if not isinstance(manifest, pd.DataFrame):
+        manifest = pd.DataFrame(manifest)
+    required = {"sample_id", "microns_per_pixel"}
+    allowed = required | {"scale_source"}
+    missing = required - set(manifest.columns)
+    extra = set(manifest.columns) - allowed
+    if missing:
+        raise NovaPilotError(f"explicit scale manifest is missing columns: {sorted(missing)}")
+    if extra:
+        raise NovaPilotError(
+            "explicit scale manifest permits only sample_id, microns_per_pixel, and optional scale_source; "
+            f"unexpected columns={sorted(extra)}"
+        )
+    observed = set(_as_text_values(observed_slides))
+    ids = _as_text_values(manifest["sample_id"].tolist())
+    if len(ids) != len(set(ids)):
+        duplicates = sorted({x for x in ids if ids.count(x) > 1})
+        raise NovaPilotError(f"explicit scale manifest has duplicate sample_id entries: {duplicates}")
+    values: dict[str, dict[str, Any]] = {}
+    for index, sample_id in enumerate(ids):
+        try:
+            factor = float(manifest.iloc[index]["microns_per_pixel"])
+        except (TypeError, ValueError) as exc:
+            raise NovaPilotError(f"invalid microns_per_pixel for {sample_id!r}") from exc
+        if not np.isfinite(factor) or factor <= 0:
+            raise NovaPilotError(f"microns_per_pixel for {sample_id!r} must be finite and positive")
+        source = "unspecified"
+        if "scale_source" in manifest.columns:
+            raw_source = manifest.iloc[index]["scale_source"]
+            if _is_missing(raw_source) or not str(raw_source).strip():
+                raise NovaPilotError(f"scale_source for {sample_id!r} must not be empty")
+            source = str(raw_source).strip()
+        values[sample_id] = {"microns_per_pixel": factor, "scale_source": source}
+    if set(values) != observed:
+        raise NovaPilotError(
+            "explicit scale manifest slides must exactly match observed slides; "
+            f"missing={sorted(observed - set(values))}, extra={sorted(set(values) - observed)}"
+        )
+    return values
+
+
+def harmonize_explicit_scale_coordinates(
+    adata: Any, slide_key: str, manifest: pd.DataFrame | str | Path, *,
+    source_key: str = SPATIAL_KEY, original_key: str = ORIGINAL_SPATIAL_KEY,
+) -> pd.DataFrame:
+    """Materialize reviewed per-slide micron coordinates and preserve source pixels."""
+    validate_input(adata, slide_key, spatial_key=source_key)
+    frame = read_explicit_scale_manifest(manifest) if isinstance(manifest, (str, Path)) else manifest.copy()
+    scales = validate_explicit_scale_manifest(frame, adata.obs[slide_key].tolist())
+    pixels = np.asarray(adata.obsm[source_key], dtype=np.float64)
+    adata.obsm[original_key] = pixels.copy()
+    slides = np.asarray([str(x) for x in adata.obs[slide_key].tolist()])
+    microns = pixels.copy()
+    rows: list[dict[str, Any]] = []
+    for slide in sorted(scales):
+        factor = float(scales[slide]["microns_per_pixel"])
+        mask = slides == slide
+        microns[mask] *= factor
+        rows.append({
+            "slide": slide, "sample_id": slide, "coordinate_strategy": "visium_explicit_scale",
+            "microns_per_pixel": factor, "scale_source": scales[slide]["scale_source"],
+            "n_obs": int(mask.sum()),
+            "original_x_min_px": float(pixels[mask, 0].min()),
+            "original_x_max_px": float(pixels[mask, 0].max()),
+            "original_y_min_px": float(pixels[mask, 1].min()),
+            "original_y_max_px": float(pixels[mask, 1].max()),
+            "harmonized_x_min_um": float(microns[mask, 0].min()),
+            "harmonized_x_max_um": float(microns[mask, 0].max()),
+            "harmonized_y_min_um": float(microns[mask, 1].min()),
+            "harmonized_y_max_um": float(microns[mask, 1].max()),
+        })
+    adata.obsm[source_key] = microns
+    return pd.DataFrame(rows)
+
+
 def harmonize_visium_coordinates(
     adata: Any, slide_key: str, manifest: pd.DataFrame | str | Path,
     physical_spot_diameter_um: float, *, source_key: str = SPATIAL_KEY,
@@ -1284,7 +1387,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--coordinate-strategy", required=True,
-                        choices=("materialized_microns", "shared_scalar", "visium_manifest"))
+                        choices=("materialized_microns", "shared_scalar", "visium_manifest", "visium_explicit_scale"))
     parser.add_argument("--scale-to-microns", type=float, default=None)
     parser.add_argument("--sample-manifest", "--manifest", dest="sample_manifest", type=Path)
     parser.add_argument("--physical-spot-diameter-um", "--physical-spot-diameter", dest="physical_spot_diameter_um", type=float)
@@ -1335,6 +1438,9 @@ def _run_impl(args: argparse.Namespace) -> int:
     elif args.coordinate_strategy == "visium_manifest":
         if args.scale_to_microns is not None or args.sample_manifest is None or args.physical_spot_diameter_um is None:
             raise NovaPilotError("visium_manifest requires --sample-manifest and --physical-spot-diameter-um, and no scalar")
+    elif args.coordinate_strategy == "visium_explicit_scale":
+        if args.scale_to_microns is not None or args.physical_spot_diameter_um is not None or args.sample_manifest is None:
+            raise NovaPilotError("visium_explicit_scale requires --sample-manifest and no scalar or physical diameter")
     elif args.scale_to_microns is not None or args.sample_manifest or args.physical_spot_diameter_um is not None:
         raise NovaPilotError("materialized_microns cannot be combined with calibration options")
 
@@ -1355,6 +1461,11 @@ def _run_impl(args: argparse.Namespace) -> int:
             adata, args.slide_key, args.sample_manifest, args.physical_spot_diameter_um
         )
         effective_scale = 1.0
+    elif args.coordinate_strategy == "visium_explicit_scale":
+        coordinate_audit = harmonize_explicit_scale_coordinates(
+            adata, args.slide_key, args.sample_manifest
+        )
+        effective_scale = 1.0
     else:
         coordinate_audit = pd.DataFrame([{
             "slide": slide, "n_obs": count, "coordinate_strategy": args.coordinate_strategy,
@@ -1366,11 +1477,12 @@ def _run_impl(args: argparse.Namespace) -> int:
     audit["coordinate_obsm_key"] = SPATIAL_KEY
     audit["coordinate_axis_order"] = ["x", "y"]
     audit["effective_novae_scale_to_microns"] = effective_scale
-    audit["original_coordinate_obsm_key"] = ORIGINAL_SPATIAL_KEY if args.coordinate_strategy == "visium_manifest" else None
+    audit["original_coordinate_obsm_key"] = ORIGINAL_SPATIAL_KEY if args.coordinate_strategy in {"visium_manifest", "visium_explicit_scale"} else None
     audit["coordinate_audit_per_slide"] = coordinate_audit.to_dict(orient="records")
     audit["expression_mode"] = args.expression_mode
     audit["expression_audit"] = expression_before
     audit["novae_auto_preprocessing"] = args.expression_mode == "raw_counts"
+    audit["sample_manifest"] = str(args.sample_manifest) if args.sample_manifest else None
     audit["manifest_sha256"] = manifest_hash
     audit["graph_radius_um_requested"] = args.graph_radius_um
     audit["graph_radius_pruning_applied"] = False
@@ -1594,6 +1706,8 @@ def _run_impl(args: argparse.Namespace) -> int:
         "coordinate_target_unit": "microns",
         "coordinate_obsm_key": SPATIAL_KEY,
         "coordinate_axis_order": "x,y",
+        "original_coordinate_obsm_key": ORIGINAL_SPATIAL_KEY if args.coordinate_strategy in {"visium_manifest", "visium_explicit_scale"} else None,
+        "coordinate_audit_per_slide": coordinate_audit.to_dict(orient="records"),
         "sample_manifest": str(args.sample_manifest) if args.sample_manifest else None,
         "sample_manifest_sha256": manifest_hash,
         "model": model_provenance,
@@ -1717,6 +1831,8 @@ validate_graph = validate_spatial_graph
 validate_resolutions = normalize_resolutions
 compute_neighbor_distance_qc = neighbor_distance_calibration
 prune_graph_radius = prune_spatial_graph_radius
+harmonize_visium_explicit_scale = harmonize_explicit_scale_coordinates
+read_scale_manifest = read_explicit_scale_manifest
 compute_domain_adjacency = domain_adjacency
 compute_domain_proportions = domain_proportions
 audit_novae_domains = audit_domain_assignments

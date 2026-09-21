@@ -34,10 +34,13 @@ PRIMARY_RESOLUTION="${NOVAE_PRIMARY_RESOLUTION:-1.0}"
 EXPECTED_DISTANCE_UM="${NOVAE_EXPECTED_NEIGHBOR_DISTANCE_UM:-100}"
 DISTANCE_TOLERANCE="${NOVAE_NEIGHBOR_DISTANCE_RELATIVE_TOLERANCE:-0.5}"
 GRAPH_RADIUS_UM="${NOVAE_GRAPH_RADIUS_UM:-100}"
+COORDINATE_STRATEGY="${NOVAE_COORDINATE_STRATEGY:-visium_manifest}"
+OMIT_GRAPH_RADIUS_PRUNING="${NOVAE_OMIT_GRAPH_RADIUS_PRUNING:-0}"
 MIN_DOMAIN_ASSIGNMENT_COVERAGE="${NOVAE_MIN_DOMAIN_ASSIGNMENT_COVERAGE:-0.70}"
 WORKERS="${NOVAE_WORKERS:-8}"
 SEED="${NOVAE_SEED:-42}"
-JOB_SCRIPT="${RUN_ROOT}/submit_novae_skin_pilot.sbatch"
+JOB_NAME="${NOVAE_JOB_NAME:-novae_skin_pilot}"
+JOB_SCRIPT="${NOVAE_JOB_SCRIPT:-${RUN_ROOT}/submit_novae_skin_pilot.sbatch}"
 
 if ! [[ "${DATASET_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
   echo "NOVAE_DATASET_ID is not a safe dataset slug" >&2
@@ -53,6 +56,7 @@ validate_directive() {
 validate_directive NOVAE_ACCOUNT "${ACCOUNT}"
 validate_directive NOVAE_QOS "${QOS}"
 validate_directive NOVAE_TIME "${TIME_LIMIT}"
+validate_directive NOVAE_JOB_NAME "${JOB_NAME}"
 read -r -a RESOLUTIONS <<< "${RESOLUTIONS_STRING}"
 if (( ${#RESOLUTIONS[@]} == 0 )); then
   echo "NOVAE_RESOLUTIONS must contain at least one value" >&2
@@ -88,15 +92,34 @@ if ! awk -v value="${DISTANCE_TOLERANCE}" 'BEGIN { exit !(value >= 0 && value < 
   echo "NOVAE_NEIGHBOR_DISTANCE_RELATIVE_TOLERANCE must be in [0,1)" >&2
   exit 2
 fi
-if ! awk -v value="${GRAPH_RADIUS_UM}" 'BEGIN { exit !(value > 0 && value < 1e308) }' || ! [[ "${GRAPH_RADIUS_UM}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-  echo "NOVAE_GRAPH_RADIUS_UM must be a positive finite numeric value" >&2
+if [[ "${COORDINATE_STRATEGY}" != "visium_manifest" && "${COORDINATE_STRATEGY}" != "visium_explicit_scale" ]]; then
+  echo "NOVAE_COORDINATE_STRATEGY must be visium_manifest or visium_explicit_scale" >&2
   exit 2
+fi
+if [[ "${OMIT_GRAPH_RADIUS_PRUNING}" != "0" && "${OMIT_GRAPH_RADIUS_PRUNING}" != "1" ]]; then
+  echo "NOVAE_OMIT_GRAPH_RADIUS_PRUNING must be 0 or 1" >&2
+  exit 2
+fi
+if (( ! OMIT_GRAPH_RADIUS_PRUNING )); then
+  if ! awk -v value="${GRAPH_RADIUS_UM}" 'BEGIN { exit !(value > 0 && value < 1e308) }' || ! [[ "${GRAPH_RADIUS_UM}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    echo "NOVAE_GRAPH_RADIUS_UM must be a positive finite numeric value" >&2
+    exit 2
+  fi
 fi
 if ! awk -v value="${MIN_DOMAIN_ASSIGNMENT_COVERAGE}" 'BEGIN { exit !(value >= 0 && value <= 1) }' || ! [[ "${MIN_DOMAIN_ASSIGNMENT_COVERAGE}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "NOVAE_MIN_DOMAIN_ASSIGNMENT_COVERAGE must be a numeric value in [0,1]" >&2
   exit 2
 fi
 RESOLUTION_ARGS="--resolutions ${RESOLUTIONS[*]}"
+if [[ "${COORDINATE_STRATEGY}" == "visium_manifest" ]]; then
+  COORDINATE_ARGS='--coordinate-strategy visium_manifest --sample-manifest "${SAMPLE_MANIFEST}" --physical-spot-diameter-um 55.0'
+elif [[ "${COORDINATE_STRATEGY}" == "visium_explicit_scale" ]]; then
+  COORDINATE_ARGS='--coordinate-strategy visium_explicit_scale --sample-manifest "${SAMPLE_MANIFEST}"'
+fi
+RADIUS_ARGS=""
+if (( ! OMIT_GRAPH_RADIUS_PRUNING )); then
+  RADIUS_ARGS="--graph-radius-um ${GRAPH_RADIUS_UM}"
+fi
 if ! [[ "${WORKERS}" =~ ^[0-9]+$ && "${SEED}" =~ ^-?[0-9]+$ ]]; then
   echo "NOVAE_WORKERS/NOVAE_SEED must be integer values" >&2
   exit 2
@@ -107,9 +130,14 @@ if [[ -n "${PARTITION}" ]]; then
 else
   PARTITION_DIRECTIVE=""
 fi
-for path_value in "${REPO_DIR}" "${INPUT_H5AD}" "${SAMPLE_MANIFEST}" "${RUN_ROOT}" "${LOG_DIR}" "${OUTPUT_DIR}" "${CONDA_ENV}"; do
-  if [[ "${path_value}" == *$'\n'* || "${path_value}" == *$'\r'* ]]; then
-    echo "path settings must not contain newlines" >&2
+for path_pair in \
+  "NOVAE_REPO_DIR:${REPO_DIR}" "NOVAE_INPUT_H5AD:${INPUT_H5AD}" \
+  "NOVAE_SAMPLE_MANIFEST:${SAMPLE_MANIFEST}" "NOVAE_RUN_ROOT:${RUN_ROOT}" \
+  "NOVAE_LOG_DIR:${LOG_DIR}" "NOVAE_OUTPUT_DIR:${OUTPUT_DIR}" \
+  "NOVAE_CONDA_ENV:${CONDA_ENV}" "NOVAE_JOB_SCRIPT:${JOB_SCRIPT}"; do
+  path_name="${path_pair%%:*}"; path_value="${path_pair#*:}"
+  if [[ -z "${path_value}" || "${path_value}" == *$'\n'* || "${path_value}" == *$'\r'* || ! "${path_value}" =~ ^[A-Za-z0-9._:/-]+$ ]]; then
+    echo "${path_name} contains unsafe path characters" >&2
     exit 2
   fi
 done
@@ -120,7 +148,7 @@ mkdir -p "${RUN_ROOT}" "${LOG_DIR}"
 
 cat > "${JOB_SCRIPT}" <<EOF
 #!/usr/bin/env bash
-#SBATCH --job-name=novae_skin_pilot
+#SBATCH --job-name=${JOB_NAME}
 #SBATCH --output=${LOG_DIR}/novae_skin_pilot_%j.out
 #SBATCH --error=${LOG_DIR}/novae_skin_pilot_%j.err
 #SBATCH --ntasks=1
@@ -167,14 +195,12 @@ python scripts/run_novae_pilot.py \\
   --primary-resolution ${PRIMARY_RESOLUTION} \\
   --expected-neighbor-distance-um ${EXPECTED_DISTANCE_UM} \\
   --neighbor-distance-relative-tolerance ${DISTANCE_TOLERANCE} \\
-  --graph-radius-um ${GRAPH_RADIUS_UM} \\
+  ${RADIUS_ARGS} \\
   --min-domain-assignment-coverage ${MIN_DOMAIN_ASSIGNMENT_COVERAGE} \\
   --accelerator gpu \\
   --workers ${WORKERS} \\
   --seed ${SEED} \\
-  --coordinate-strategy visium_manifest \\
-  --sample-manifest "\${SAMPLE_MANIFEST}" \\
-  --physical-spot-diameter-um 55.0
+  ${COORDINATE_ARGS}
 EOF
 chmod +x "${JOB_SCRIPT}"
 if (( RENDER_ONLY )); then

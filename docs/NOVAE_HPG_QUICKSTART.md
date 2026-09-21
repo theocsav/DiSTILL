@@ -185,8 +185,9 @@ against the observed source slides. Override `NOVAE_SOURCE_H5AD`,
 requests 64 GB RAM for the two full H5AD loads, one CPU, and no GPU. No
 calibration correction or sensitivity inference is selected by this audit.
 When a manifest is supplied, the scheduled job also emits
-`source_geometry_summary.csv` and the clearly non-operational
-`nominal_100um_sensitivity_candidate_scales.csv`. Geometry uses only observed
+`source_geometry_summary.csv` and the clearly non-operational (at audit time)
+`nominal_100um_sensitivity_candidate_scales.csv`; only the separately reviewed
+versioned preset described below is an operational input. Geometry uses only observed
 in-tissue source spots, canonical Visium array offsets, and raw source pixels
 (not annotated materialized microns); its broad evidence is not independent
 microscope calibration.
@@ -202,10 +203,46 @@ QC only. Visium spots/graphs and any pseudo-FOV units are minimal platform
 deviations from CosMx cells/FOVs; no downstream features are implemented here
 and all selection/evaluation stays patient-fold-safe.
 
-The raw Visium ZIPs are local, not on HPG. The source geometry audit remains
-ready for synthetic tests only; real source auditing waits for an explicit
-staging decision and a SLURM launcher. Do not upload the approximately 6 GB
-source set or run a real ZIP audit on an HPG login node.
+The raw Visium ZIPs are local, not on HPG. The source H5AD geometry audit has
+completed on SLURM; only the approximately 6 GB raw ZIP audit/staging remains
+deferred. Do not upload the raw ZIP set or run a real ZIP audit on an HPG login
+node.
+
+## Predeclared nominal-100um calibration sensitivity
+
+The reviewed 14-row candidate factors from geometry job **42852404** are
+versioned at `presets/novae_nominal_100um_scales.csv`. The dedicated
+`scripts/submit_novae_nominal_100um_sensitivity.sh` wrapper uses the same source
+H5AD, model revision, seed (`42`), raw-count expression contract, resolutions
+(`0.5 1.0 2.0`), primary (`1.0`), and 0.70 coverage gate as the baseline, but
+has a distinct dataset/output identity and selects
+`coordinate_strategy=visium_explicit_scale`. Its manifest requires exactly
+`sample_id,microns_per_pixel` (with optional `scale_source`), rejects duplicate,
+missing, nonfinite, or nonpositive factors, preserves
+`obsm['spatial_original_px']`, and records per-slide ranges and provenance.
+
+The sensitivity deliberately omits explicit radius pruning. Baseline pruning
+removed zero edges, and NOVAE's canonical Visium graph construction is
+coordinate-scale-independent; omission holds graph topology fixed and avoids
+median-at-100 rounding. This is a predeclared rationale, not a topology claim:
+run the CPU-only `scripts/submit_novae_comparison.sh` only after both outputs
+exist. The comparison reads H5ADs backed without accessing expression `X`,
+compares exact row/variable IDs, graph edge hashes/diffs, validity/coverage,
+latent and resolution assignments, and manifest FIDE/JSD, then emits atomic JSON
+and concise CSVs. Overall acceptance is true only when exact row/var alignment,
+graph identity, coverage >=0.70 overall and per slide, no valid missing labels,
+finite metrics, and available comparisons all hold. `overall_accepted` is only the technical and
+predeclared comparison contract; it is not a biological domain-stability claim,
+and no ARI/NMI equivalence threshold is predeclared. The comparison also checks
+fixed input/model/seed/expression/resolution/technology provenance, coordinate
+strategy roles, baseline zero-edge pruning, and sensitivity pruning omission.
+
+Recorded baseline paths are source H5AD
+`/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_visium_ssc_spatial.h5ad`
+and the completed run's resolved manifest
+`/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/novae_skin_pilot/h5ad-provenance-fix-20260906_024602/novae_resolved_manifest_skin_visium_ssc.json`.
+Geometry evidence is the read-only H5AD QC output
+`h5ad-qc-geometry-20260921_161419` (job 42852404). Do not claim topology identity until comparison succeeds.
 
 ## Submit
 
