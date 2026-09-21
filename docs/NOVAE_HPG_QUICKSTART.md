@@ -9,7 +9,9 @@ This is a standalone **exploratory Phase 0/1** branch. It is not a
 confirmatory held-out classification. The scientific claim is exploratory
 domain/representation biology, not a fully inductive held-out domain
 classifier. Continuous latents may later be evaluated with patient-held-out
-CPU modeling; whole-cohort domain labels remain exploratory. Use the dedicated
+CPU modeling; whole-cohort domain labels remain exploratory. The durable
+[evidence and decision log](NOVAE_DECISION_LOG.md) records the rationale, job
+references, deferred alternatives, and pending criteria. Use the dedicated
 NOVAE environment, not the existing Python 3.10 pipeline environment (NOVAE
 1.1.1 requires Python >=3.11).
 
@@ -174,11 +176,20 @@ scripts/submit_novae_h5ad_qc.sh                # submit one CPU SLURM job
 ```
 
 The launcher defaults to the completed-run paths above and refuses an existing
-final output directory. Override `NOVAE_SOURCE_H5AD`,
-`NOVAE_ANNOTATED_H5AD`, and `NOVAE_H5AD_QC_OUTPUT_DIR` for an explicitly
-reviewed alternate pair. It requests 64 GB RAM for the two full H5AD loads,
-one CPU, and no GPU. No calibration correction or sensitivity inference is
-selected by this audit.
+final output directory. It passes the source sample manifest
+`/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_visium_ssc_sample_manifest.csv`
+by default (`NOVAE_SAMPLE_MANIFEST` overrides it) and validates that manifest
+against the observed source slides. Override `NOVAE_SOURCE_H5AD`,
+`NOVAE_ANNOTATED_H5AD`, `NOVAE_SAMPLE_MANIFEST`, and
+`NOVAE_H5AD_QC_OUTPUT_DIR` for an explicitly reviewed alternate pair. It
+requests 64 GB RAM for the two full H5AD loads, one CPU, and no GPU. No
+calibration correction or sensitivity inference is selected by this audit.
+When a manifest is supplied, the scheduled job also emits
+`source_geometry_summary.csv` and the clearly non-operational
+`nominal_100um_sensitivity_candidate_scales.csv`. Geometry uses only observed
+in-tissue source spots, canonical Visium array offsets, and raw source pixels
+(not annotated materialized microns); its broad evidence is not independent
+microscope calibration.
 
 NOVAE remains a narrow test of the niche-assignment stage in the Myles Tan et
 al. (arXiv:2509.09923) workflow, not a divergent replacement. The downstream

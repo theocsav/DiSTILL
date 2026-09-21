@@ -6,6 +6,8 @@ import subprocess
 import zipfile
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from scripts.audit_skin_visium_source_geometry import SourceGeometryError, audit_archive, audit_source, write_audit
@@ -92,6 +94,7 @@ def test_h5ad_launcher_render_only(tmp_path):
     assert "#SBATCH --gres" not in rendered
     assert "#SBATCH --cpus-per-task=1" in rendered and "--mem=64gb" in rendered
     assert "audit_novae_h5ad_qc.py" in rendered
+    assert "--sample-manifest" in rendered
     assert result.returncode == 0
     override = {**os.environ, **env, "NOVAE_H5AD_QC_DOMAIN_COLUMNS": "novae_domains_res0.5,novae_domains_res1.0"}
     subprocess.run(["bash", str(script), "--render-only"], env=override, check=True, capture_output=True, text=True)
@@ -162,6 +165,92 @@ def test_h5ad_cross_tabs_preserve_na_and_misalignment(tmp_path):
         run_audit(source_path, tmp_path / "misaligned.h5ad", tmp_path / "qc2")
     with pytest.raises(H5ADQCCError, match="existing"):
         run_audit(source_path, annotated_path, output)
+
+
+def _geometry_h5ad_pair(tmp_path):
+    ad = pytest.importorskip("anndata")
+    np = pytest.importorskip("numpy")
+    scipy_sparse = pytest.importorskip("scipy.sparse")
+    ids = ["A0", "A2", "A1", "B0", "B2", "B1"]
+    source = ad.AnnData(scipy_sparse.csr_matrix(np.ones((6, 2), dtype=int)))
+    source.obs_names = ids
+    source.obs["sample_id"] = ["A", "A", "A", "B", "B", "B"]
+    source.obs["in_tissue"] = [1] * 6
+    source.obs["array_row"] = [0, 0, 1, 0, 0, 1]
+    source.obs["array_col"] = [0, 2, 1, 0, 2, 1]
+    source.obsm["spatial"] = np.asarray([[0, 0], [0, 10], [np.sqrt(75), 5]] * 2, dtype=float)
+    annotated = source.copy()
+    annotated.obs["neighborhood_valid"] = [True] * 6
+    annotated.obs["novae_domains_res0.5"] = ["D"] * 6
+    annotated.obsp["spatial_connectivities"] = scipy_sparse.csr_matrix((6, 6))
+    # Deliberately use different annotated coordinates: geometry must use source pixels.
+    annotated.obsm["spatial"] = np.full((6, 2), 999.0)
+    source_path, annotated_path = tmp_path / "geometry-source.h5ad", tmp_path / "geometry-annotated.h5ad"
+    source.write_h5ad(source_path)
+    annotated.write_h5ad(annotated_path)
+    manifest = tmp_path / "manifest.csv"
+    pd.DataFrame({"sample_id": ["A", "B"], "spot_diameter_fullres": [10.0, 20.0]}).to_csv(manifest, index=False)
+    return source_path, annotated_path, manifest
+
+
+def test_h5ad_source_geometry_exact_result_and_candidate_caveat(tmp_path):
+    from scripts.audit_novae_h5ad_qc import run_audit
+    source, annotated, manifest = _geometry_h5ad_pair(tmp_path)
+    output = run_audit(source, annotated, tmp_path / "geometry-out", sample_manifest=manifest)
+    summary = pd.read_csv(output / "source_geometry_summary.csv")
+    assert summary["canonical_lattice_edges"].tolist() == [3, 3]
+    assert summary["zero_degree"].tolist() == [0, 0]
+    assert summary.loc[0, "pixel_pitch_median_px"] == pytest.approx(10.0)
+    assert summary.loc[0, "current_55um_resulting_median_um"] == pytest.approx(55.0)
+    assert summary.loc[0, "nominal_100um_scale_um_per_pixel"] == pytest.approx(10.0)
+    candidate = pd.read_csv(output / "nominal_100um_sensitivity_candidate_scales.csv")
+    assert list(candidate.columns) == ["sample_id", "microns_per_pixel", "scale_source"]
+    assert candidate["scale_source"].eq("nominal_100um_array_pitch_sensitivity_candidate").all()
+    payload = json.loads((output / "novae_h5ad_qc.json").read_text())
+    assert "broad evidence" in payload["caveat"] and "non-operational" in payload["caveat"]
+
+
+def test_h5ad_geometry_slide_and_manifest_contracts_fail_closed(tmp_path):
+    from scripts.audit_novae_h5ad_qc import H5ADQCCError, run_audit
+    source, annotated, manifest = _geometry_h5ad_pair(tmp_path)
+    mismatch = tmp_path / "mismatch.h5ad"
+    changed = __import__("anndata").read_h5ad(annotated)
+    changed.obs.iloc[0, changed.obs.columns.get_loc("sample_id")] = "B"
+    changed.write_h5ad(mismatch)
+    with pytest.raises(H5ADQCCError, match="slide values"):
+        run_audit(source, mismatch, tmp_path / "mismatch-out", sample_manifest=manifest)
+    duplicate = tmp_path / "duplicate.csv"
+    pd.DataFrame({"sample_id": ["A", "A", "B"], "spot_diameter_fullres": [10, 10, 20]}).to_csv(duplicate, index=False)
+    with pytest.raises(H5ADQCCError, match="duplicate"):
+        run_audit(source, annotated, tmp_path / "duplicate-out", sample_manifest=duplicate)
+    missing = tmp_path / "missing.csv"
+    pd.DataFrame({"sample_id": ["A"], "spot_diameter_fullres": [10]}).to_csv(missing, index=False)
+    with pytest.raises(H5ADQCCError, match="exactly match"):
+        run_audit(source, annotated, tmp_path / "missing-out", sample_manifest=missing)
+
+
+@pytest.mark.parametrize("mutation, message", [
+    ("nan_pixel", "non-finite"), ("duplicate_lattice", "duplicate lattice"),
+    ("duplicate_pixel", "duplicate pixel"), ("no_edge", "no canonical lattice"),
+])
+def test_h5ad_geometry_failures_are_specific(tmp_path, mutation, message):
+    ad = pytest.importorskip("anndata")
+    source, annotated, manifest = _geometry_h5ad_pair(tmp_path)
+    data = ad.read_h5ad(source)
+    if mutation == "nan_pixel":
+        data.obsm["spatial"][0, 0] = np.nan
+    elif mutation == "duplicate_lattice":
+        data.obs.iloc[1, data.obs.columns.get_loc("array_col")] = 0
+    elif mutation == "duplicate_pixel":
+        data.obsm["spatial"][1] = data.obsm["spatial"][0]
+    else:
+        data.obs.iloc[1, data.obs.columns.get_loc("array_col")] = 4
+        data.obs.iloc[2, data.obs.columns.get_loc("array_row")] = 2
+        data.obs.iloc[2, data.obs.columns.get_loc("array_col")] = 5
+    data.write_h5ad(tmp_path / "mutated-source.h5ad")
+    from scripts.audit_novae_h5ad_qc import H5ADQCCError, run_audit
+    with pytest.raises(H5ADQCCError, match=message):
+        run_audit(tmp_path / "mutated-source.h5ad", annotated, tmp_path / "failure-out", sample_manifest=manifest)
 
 
 def test_h5ad_missing_slide_and_domain_consistency_fail_closed(tmp_path):

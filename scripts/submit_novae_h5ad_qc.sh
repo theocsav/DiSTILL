@@ -16,6 +16,7 @@ fi
 REPO_DIR="${NOVAE_REPO_DIR:-/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool}"
 PROCESSED_DIR="${NOVAE_PROCESSED_DIR:-/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed}"
 SOURCE_H5AD="${NOVAE_SOURCE_H5AD:-${PROCESSED_DIR}/skin_visium_ssc_spatial.h5ad}"
+SAMPLE_MANIFEST="${NOVAE_SAMPLE_MANIFEST:-${PROCESSED_DIR}/skin_visium_ssc_sample_manifest.csv}"
 ANNOTATED_H5AD="${NOVAE_ANNOTATED_H5AD:-/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/novae_skin_pilot/h5ad-provenance-fix-20260906_024602/novae_skin_visium_ssc_zero_shot.h5ad}"
 RUN_ROOT="${NOVAE_RUN_ROOT:-/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/novae_skin_pilot}"
 OUTPUT_DIR="${NOVAE_H5AD_QC_OUTPUT_DIR:-${RUN_ROOT}/h5ad-qc-skin_visium_ssc}"
@@ -59,7 +60,7 @@ validate_path() {
 }
 for path_pair in \
   "NOVAE_REPO_DIR:${REPO_DIR}" "NOVAE_SOURCE_H5AD:${SOURCE_H5AD}" \
-  "NOVAE_ANNOTATED_H5AD:${ANNOTATED_H5AD}" "NOVAE_RUN_ROOT:${RUN_ROOT}" \
+  "NOVAE_SAMPLE_MANIFEST:${SAMPLE_MANIFEST}" "NOVAE_ANNOTATED_H5AD:${ANNOTATED_H5AD}" "NOVAE_RUN_ROOT:${RUN_ROOT}" \
   "NOVAE_H5AD_QC_OUTPUT_DIR:${OUTPUT_DIR}" "NOVAE_H5AD_QC_LOG_DIR:${LOG_DIR}" \
   "NOVAE_H5AD_QC_JOB_SCRIPT:${JOB_SCRIPT}" "NOVAE_CONDA_ENV:${CONDA_ENV}"; do
   validate_path "${path_pair%%:*}" "${path_pair#*:}"
@@ -94,6 +95,7 @@ set -euo pipefail
 
 REPO_DIR=${REPO_DIR@Q}
 SOURCE_H5AD=${SOURCE_H5AD@Q}
+SAMPLE_MANIFEST=${SAMPLE_MANIFEST@Q}
 ANNOTATED_H5AD=${ANNOTATED_H5AD@Q}
 OUTPUT_DIR=${OUTPUT_DIR@Q}
 CONDA_ENV=${CONDA_ENV@Q}
@@ -106,7 +108,7 @@ set +u
 conda activate "\${CONDA_ENV}"
 set -u
 cd "\${REPO_DIR}"
-[[ -f "\${SOURCE_H5AD}" && -f "\${ANNOTATED_H5AD}" ]]
+[[ -f "\${SOURCE_H5AD}" && -f "\${ANNOTATED_H5AD}" && -f "\${SAMPLE_MANIFEST}" ]]
 DOMAIN_ARGS=()
 if [[ -n "\${DOMAIN_COLUMNS}" ]]; then
   DOMAIN_ARGS=(--domain-columns "\${DOMAIN_COLUMNS}")
@@ -114,6 +116,7 @@ fi
 python scripts/audit_novae_h5ad_qc.py \\
   --source-h5ad "\${SOURCE_H5AD}" \\
   --annotated-h5ad "\${ANNOTATED_H5AD}" \\
+  --sample-manifest "\${SAMPLE_MANIFEST}" \\
   --output-dir ${OUTPUT_DIR@Q} \\
   --slide-key "\${SLIDE_KEY}" \\
   "\${DOMAIN_ARGS[@]}"

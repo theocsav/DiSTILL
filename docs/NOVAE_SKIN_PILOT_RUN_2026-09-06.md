@@ -6,7 +6,9 @@ This report records the completed NOVAE HPG pilot and the research needed to
 interpret it. It is an **exploratory Phase 0/1 result**, not confirmatory
 held-out evidence. The run used `reference="all"`, so its prototypes use the
 complete cohort. There was no DiSTILL integration. Do not use these domains to
-claim fold-safe classification or generalisation.
+claim fold-safe classification or generalisation. See the durable [NOVAE
+evidence and decision log](NOVAE_DECISION_LOG.md) for the chronological gate
+rationale, deferred alternatives, and pending decisions.
 
 The work was performed on branch `feature/novae-representations` with these
 implementation commits:
@@ -139,9 +141,9 @@ retained for QC:
 - `SSc5380_AATTACCAACTCCGTA-1`
 
 The builder keeps filtered-matrix barcodes marked `in_tissue=1` and applies no
-count threshold. SSc5380 is a known sparse outlier. This report does **not**
-claim that the six zero-count rows are invalid-neighborhood rows: that would
-require a cross-tabulation not performed here.
+count threshold. SSc5380 is a known sparse outlier. The subsequent scheduled
+H5AD QC cross-tab is reported below; this initial expression paragraph alone
+does not claim that expression zeros cause invalid neighborhoods.
 
 ## Coordinate calibration research
 
@@ -264,10 +266,48 @@ scripts/submit_novae_h5ad_qc.sh                 # submit one CPU SLURM job
 ```
 
 The launcher defaults to the source and successful annotated H5AD recorded
-above, one CPU, 64 GB, and one hour. Set `NOVAE_SOURCE_H5AD`,
-`NOVAE_ANNOTATED_H5AD`, and `NOVAE_H5AD_QC_OUTPUT_DIR` only when an explicit
-alternate pair/output is intended; the output directory must not already
-exist. A failed audit leaves no published final output directory.
+above, plus the source sample manifest
+`/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_visium_ssc_sample_manifest.csv`.
+Set `NOVAE_SOURCE_H5AD`, `NOVAE_ANNOTATED_H5AD`, `NOVAE_SAMPLE_MANIFEST`, and
+`NOVAE_H5AD_QC_OUTPUT_DIR` only when an explicit alternate pair/manifest/output
+is intended; the output directory must not already exist. A failed audit leaves
+no published final output directory.
+
+### Completed H5AD QC gate (SLURM job 42832181)
+
+The read-only source/annotated H5AD audit completed successfully as SLURM job
+**42832181** (`COMPLETED`, exit `0:0`, 59 seconds) and published its output under
+`h5ad-qc-20260921_064952/`. It found **13,417** total rows: **13,372** valid /
+assigned and **45** invalid. The domain validity/NA contract passed at all
+requested resolutions (0.5, 1.0, and 2.0).
+
+The exact zero-count × graph-isolation × validity cross-tab was:
+
+| zero count | graph status | neighborhood validity | count |
+|---|---|---|---:|
+| no | nonisolated | invalid | 12 |
+| no | nonisolated | valid | 13,372 |
+| no | isolated | invalid | 27 |
+| no | isolated | valid | 0 |
+| yes | nonisolated | invalid | 1 |
+| yes | nonisolated | valid | 0 |
+| yes | isolated | invalid | 5 |
+| yes | isolated | valid | 0 |
+
+Thus all six zero-count rows were invalid/unassigned, with no zero-count row
+assigned. Among those six, five were degree-0/component-1 and one was
+degree-1/component-2. This is an interpretation of the observed cross-tab, not
+a claim that expression zeros cause invalid neighborhoods. At this evidence
+gate, **no zero-count filtering sensitivity rerun is justified**; rows remain
+retained for niche-assignment QC.
+
+The same scheduled audit now validates source and annotated slide values
+row-by-row (in addition to observation IDs), validates the default sample
+manifest, and emits `source_geometry_summary.csv` plus the clearly
+non-operational `nominal_100um_sensitivity_candidate_scales.csv`. Geometry is
+computed only from observed in-tissue source H5AD spots, canonical Visium hex
+pairs, and source raw full-resolution pixels. It is broad evidence, not
+independent microscope calibration; no correction has been selected.
 
 ### Raw ZIP geometry audit (later, after staging decision)
 
