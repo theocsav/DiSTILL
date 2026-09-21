@@ -221,29 +221,45 @@ has a distinct dataset/output identity and selects
 missing, nonfinite, or nonpositive factors, preserves
 `obsm['spatial_original_px']`, and records per-slide ranges and provenance.
 
-For the pending sensitivity, the dedicated wrapper fixes both `--cpus-per-task`
-and NOVAE `--workers` to **2**, matching the group's remaining 2 of 16 CPUs
-under its QoS allocation. This is an operational concurrency adjustment only;
-it does not change the source input, model/revision, seed, resolutions,
-coordinate/scaling protocol, or other scientific inputs. The run is
-inference-only, and its outputs remain subject to the existing fail-closed
-baseline comparison before any interpretation.
+The approved paired diagnostic supersedes that pending two-worker sensitivity
+for calibration acceptance. Render/inspect it with
+`scripts/submit_novae_paired_cpu_diagnostic.sh --render-only`, then submit the
+single CPU-only job only after review. It requests one node, one allocated CPU,
+96 GB, and no GPU GRES; it runs both arms sequentially in the same process
+environment with `workers=0`, seed 42, raw counts, and the opt-in fail-closed
+Torch deterministic policy. The original arm is exactly
+`visium_manifest` with the original sample manifest, 55 µm physical spot
+diameter, and 100 µm graph pruning. The calibrated arm is
+`visium_explicit_scale` with the reviewed versioned scale preset and no radius
+pruning. Each arm has a distinct immutable dataset/output identity, and the
+job invokes `compare_novae_runs.py` only after both transactional outputs
+exist. Test-only path substitutions use the dedicated `NOVAE_PAIRED_*`
+variables; scientific settings reject conflicting inherited overrides.
 
-The sensitivity deliberately omits explicit radius pruning. Baseline pruning
+The calibrated arm deliberately omits explicit radius pruning. Baseline pruning
 removed zero edges, and NOVAE's canonical Visium graph construction is
 coordinate-scale-independent; omission holds graph topology fixed and avoids
-median-at-100 rounding. This is a predeclared rationale, not a topology claim:
-run the CPU-only `scripts/submit_novae_comparison.sh` only after both outputs
-exist. The comparison reads H5ADs backed without accessing expression `X`,
-compares exact row/variable IDs, graph edge hashes/diffs, validity/coverage,
-latent and resolution assignments, and manifest FIDE/JSD, then emits atomic JSON
-and concise CSVs. Overall acceptance is true only when exact row/var alignment,
-graph identity, coverage >=0.70 overall and per slide, no valid missing labels,
-finite metrics, and available comparisons all hold. `overall_accepted` is only the technical and
-predeclared comparison contract; it is not a biological domain-stability claim,
-and no ARI/NMI equivalence threshold is predeclared. The comparison also checks
-fixed input/model/seed/expression/resolution/technology provenance, coordinate
-strategy roles, baseline zero-edge pruning, and sensitivity pruning omission.
+median-at-100 rounding. This is a predeclared rationale, not a topology claim.
+The comparison reads H5ADs backed without accessing expression `X`, compares
+exact row/variable IDs, graph edge hashes/diffs, validity/coverage, latent and
+resolution assignments, and manifest FIDE/JSD, then emits atomic JSON and
+concise CSVs. Its fixed-design report now requires identical accelerator and
+worker settings and records whether deterministic policy was requested and
+effective (old manifests without that policy remain legacy-compatible, but
+cannot establish a deterministic paired diagnostic). The earlier GPU
+comparison's `overall_accepted` was technical under the earlier contract;
+workers=8 versus workers=2 is a runtime confound, so it is not calibration
+acceptance. No calibrated output has been chosen and downstream domains remain
+blocked. For context, the earlier GPU comparison observed identical topology
+(38,107 undirected edges; SHA-256 `f8806398afd08dfd538feb5593d1d9a6723b11f4fab62a9c4af205b993472369`), mean latent cosine 0.99994935,
+ARI/NMI of 0.58034227/0.63369739, 0.52573945/0.61894851, and
+0.46975010/0.65062489 at resolutions 0.5/1.0/2.0, respectively. Its
+baseline→sensitivity FIDE/JSD pairs were 0.70962546→0.75691570 /
+0.06096971→0.03982476, 0.57881840→0.55868906 / 0.14938784→0.13902419, and
+0.45887614→0.47276038 / 0.28268963→0.26369173. Those are observed GPU
+values only; the worker mismatch is a runtime confound, so record the paired
+CPU job's replacement values separately and do not treat the old
+`overall_accepted` as calibration acceptance.
 
 Recorded baseline paths are source H5AD
 `/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_visium_ssc_spatial.h5ad`

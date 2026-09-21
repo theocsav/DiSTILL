@@ -41,6 +41,7 @@ from scripts.run_novae_pilot import (
     _canonicalize_core_provenance,
     _canonicalize_provenance,
     _h5ad_safe_provenance,
+    _configure_deterministic_execution,
 )
 
 
@@ -628,6 +629,21 @@ def test_legacy_resolution_is_single_and_primary_defaults_to_alias():
                                        "materialized_microns", "--resolution", "0.5"])
     assert args.resolutions is None and args.primary_resolution is None
     assert normalize_resolutions([args.resolution], args.primary_resolution or args.resolution) == ([0.5], 0.5)
+
+
+def test_deterministic_execution_is_opt_in_and_provenanced():
+    disabled = _configure_deterministic_execution(False)
+    assert disabled == {"requested": False, "effective": False,
+                        "algorithm_mode": "disabled", "backend_settings": {}}
+    try:
+        import torch  # noqa: F401
+    except ImportError:
+        with pytest.raises(NovaPilotError, match="torch is unavailable"):
+            _configure_deterministic_execution(True)
+        return
+    enabled = _configure_deterministic_execution(True)
+    assert enabled["requested"] is True and enabled["effective"] is True
+    assert enabled["algorithm_mode"] == "error"
 
 
 def test_exploratory_semantics_are_explicit_in_help():

@@ -341,6 +341,16 @@ def _fixed_design(left: Mapping[str, Any], right: Mapping[str, Any]) -> dict[str
     checks["requested_resolutions_identical"] = bool(value(left, "requested_resolutions") and value(left, "requested_resolutions") == value(right, "requested_resolutions"))
     checks["primary_resolution_identical"] = bool(value(left, "primary_resolution") is not None and value(left, "primary_resolution") == value(right, "primary_resolution"))
     checks["technology_identical"] = bool(value(left, "technology") and value(left, "technology") == value(right, "technology"))
+    left_accelerator, right_accelerator = value(left, "accelerator"), value(right, "accelerator")
+    left_workers, right_workers = value(left, "workers"), value(right, "workers")
+    accelerator_legacy_compatible = False
+    workers_legacy_compatible = False
+    checks["accelerator_identical"] = bool(
+        left_accelerator is not None and left_accelerator == right_accelerator
+    )
+    checks["workers_identical"] = bool(
+        left_workers is not None and left_workers == right_workers
+    )
     checks["distance_qc_expected_um_predeclared"] = bool(value(left, "distance_qc_expected_um") == 100.0 and value(right, "distance_qc_expected_um") == 100.0)
     checks["distance_qc_tolerance_predeclared"] = bool(value(left, "distance_qc_relative_tolerance") == 0.5 and value(right, "distance_qc_relative_tolerance") == 0.5)
     checks["minimum_assignment_coverage_predeclared"] = bool(value(left, "minimum_domain_assignment_coverage") == 0.70 and value(right, "minimum_domain_assignment_coverage") == 0.70)
@@ -354,7 +364,48 @@ def _fixed_design(left: Mapping[str, Any], right: Mapping[str, Any]) -> dict[str
     sensitivity_radius = right.get("radius_pruning")
     checks["baseline_radius_pruning_removed_zero_edges"] = bool(isinstance(baseline_radius, Mapping) and baseline_radius.get("applied") is True and baseline_radius.get("removed_undirected_edges") == 0)
     checks["sensitivity_radius_pruning_omitted"] = sensitivity_radius is None or (isinstance(sensitivity_radius, Mapping) and sensitivity_radius.get("applied") is False)
-    return {**checks, "fixed_design_contract": bool(all(checks.values()))}
+    left_policy, right_policy = left.get("deterministic_policy"), right.get("deterministic_policy")
+    policy_missing = left_policy is None and right_policy is None
+    if policy_missing:
+        # Manifests written before --deterministic existed remain comparable, but
+        # they cannot claim a deterministic paired diagnostic.
+        deterministic_identical = True
+        deterministic_requested = False
+        deterministic_legacy_compatible = True
+    elif isinstance(left_policy, Mapping) and isinstance(right_policy, Mapping):
+        deterministic_identical = bool(left_policy == right_policy)
+        deterministic_requested = bool(left_policy.get("requested") is True and right_policy.get("requested") is True)
+        deterministic_legacy_compatible = False
+    else:
+        deterministic_identical = False
+        deterministic_requested = False
+        deterministic_legacy_compatible = False
+    checks["deterministic_policy_identical"] = deterministic_identical
+    checks["deterministic_policy_requested"] = deterministic_requested or deterministic_legacy_compatible
+    checks["deterministic_policy_effective"] = bool(
+        policy_missing or (
+            isinstance(left_policy, Mapping) and isinstance(right_policy, Mapping)
+            and left_policy.get("effective") is True and right_policy.get("effective") is True
+        )
+    )
+    return {**checks,
+            "deterministic_policy_requested": None if policy_missing else checks["deterministic_policy_requested"],
+            "deterministic_policy_effective": None if policy_missing else checks["deterministic_policy_effective"],
+            "accelerator_provenance_available": left_accelerator is not None and right_accelerator is not None,
+            "accelerator_legacy_compatible": accelerator_legacy_compatible,
+            "accelerator_observed": [left_accelerator, right_accelerator] if left_accelerator is not None and right_accelerator is not None else None,
+            "workers_provenance_available": left_workers is not None and right_workers is not None,
+            "workers_legacy_compatible": workers_legacy_compatible,
+            "workers_observed": [left_workers, right_workers] if left_workers is not None and right_workers is not None else None,
+            "deterministic_policy_provenance_available": not policy_missing,
+            "deterministic_policy_legacy_compatible": deterministic_legacy_compatible,
+            "deterministic_policy_effective_observed": (
+                None if policy_missing else bool(
+                    isinstance(left_policy, Mapping) and isinstance(right_policy, Mapping)
+                    and left_policy.get("effective") is True and right_policy.get("effective") is True
+                )
+            ),
+            "fixed_design_contract": bool(all(checks.values()))}
 
 
 def compare_runs(baseline_h5ad: str | Path, sensitivity_h5ad: str | Path,

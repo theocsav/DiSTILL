@@ -332,15 +332,37 @@ with `sample_id`; it was not to overwrite the original sample manifest. The
 reviewed 42852404 factors are now separately versioned at
 `presets/novae_nominal_100um_scales.csv` for the named sensitivity only.
 
-## Predeclared nominal-100um sensitivity (pending execution)
+## Predeclared paired CPU calibration diagnostic (pending execution)
 
-The reviewed geometry audit (job 42852404) produced 14 candidate per-slide
-factors, versioned without rounding at
-`presets/novae_nominal_100um_scales.csv`. The dedicated wrapper
-`scripts/submit_novae_nominal_100um_sensitivity.sh` retains the baseline source
-H5AD, resolved model revision, seed 42, raw counts, resolutions 0.5/1.0/2.0,
-primary 1.0, and 0.70 coverage gate, while using the distinct dataset identity
-`skin_visium_ssc_nominal_100um_sensitivity` and `visium_explicit_scale`.
+The earlier GPU comparison was `overall_accepted` under the technical contract
+that existed then, but baseline workers=8 versus sensitivity workers=2 is a
+runtime confound. It is not sufficient for isolated calibration acceptance.
+The approved replacement is `scripts/submit_novae_paired_cpu_diagnostic.sh`:
+one SLURM node, one CPU, 96 GB, no GPU GRES, and sequential original and
+calibrated arms in one process environment. Both arms use the same source H5AD,
+cached checkpoint/revision, raw counts, seed 42, resolutions 0.5/1.0/2.0,
+primary 1.0, expected distance 100 µm, tolerance 0.5, coverage 0.70,
+`sample_id`/`patient`, `reference=all`, CPU, workers=0, and fail-closed
+Torch deterministic execution. The original arm exactly uses
+`visium_manifest`, the original manifest, 55 µm spot diameter, and 100 µm
+radius pruning. The calibrated arm uses `visium_explicit_scale`, the reviewed
+versioned scale preset, and no radius pruning. Outputs and dataset identities
+are distinct; comparison runs only after both transactional outputs succeed.
+
+The earlier GPU comparison observed identical graph topology (38,107
+undirected edges; SHA-256 `f8806398afd08dfd538feb5593d1d9a6723b11f4fab62a9c4af205b993472369`), mean latent cosine `0.99994935`, and
+these common-valid domain metrics:
+
+| Resolution | ARI | NMI | Baseline FIDE → sensitivity FIDE | Baseline JSD → sensitivity JSD |
+|---|---:|---:|---:|---:|
+| 0.5 | 0.58034227 | 0.63369739 | 0.70962546 → 0.75691570 | 0.06096971 → 0.03982476 |
+| 1.0 | 0.52573945 | 0.61894851 | 0.57881840 → 0.55868906 | 0.14938784 → 0.13902419 |
+| 2.0 | 0.46975010 | 0.65062489 | 0.45887614 → 0.47276038 | 0.28268963 → 0.26369173 |
+
+Those values came from the earlier technically accepted GPU comparison, not
+from the paired CPU diagnostic; workers=8 versus workers=2 remains a runtime
+confound. The paired report is the source of the replacement observed values.
+No calibrated output has been chosen and downstream domains remain blocked.
 
 Baseline source H5AD is
 `/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_visium_ssc_spatial.h5ad`;

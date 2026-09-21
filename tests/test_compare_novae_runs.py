@@ -41,7 +41,7 @@ def _pair(tmp_path: Path, *, altered_graph: bool = False):
         "primary_resolution": 0.5, "technology": "visium",
         "distance_qc_expected_um": 100.0, "distance_qc_relative_tolerance": 0.5,
         "minimum_domain_assignment_coverage": 0.70, "slide_key": "sample_id", "group_key": "patient",
-        "reference": "all", "inference_mode": "zero_shot",
+        "reference": "all", "inference_mode": "zero_shot", "accelerator": "cpu", "workers": 0,
         "coordinate_strategy": "visium_manifest",
         "radius_pruning": {"applied": True, "removed_undirected_edges": 0},
     }
@@ -77,6 +77,50 @@ def test_science_missing_resolution_is_not_filtered_and_rejects_acceptance(tmp_p
     assert not report["acceptance"]["overall_accepted"]
     science = pd.read_csv(output / "science_metrics_comparison.csv")
     assert len(science) == 1 and not bool(science.loc[0, "available"])
+
+
+@pytest.mark.parametrize("field,value", [("accelerator", "gpu"), ("workers", 2)])
+def test_accelerator_and_workers_mismatches_reject_acceptance(tmp_path, field, value):
+    args = _pair(tmp_path)
+    baseline = json.loads(args[2].read_text())
+    sensitivity = json.loads(args[3].read_text())
+    baseline["run"].update({"accelerator": "cpu", "workers": 0,
+                             "deterministic_policy": {"requested": True, "effective": True}})
+    sensitivity["run"].update({"accelerator": "cpu", "workers": 0,
+                                "deterministic_policy": {"requested": True, "effective": True}})
+    sensitivity["run"][field] = value
+    args[2].write_text(json.dumps(baseline)); args[3].write_text(json.dumps(sensitivity))
+    output = compare_runs(*args, tmp_path / f"mismatch-{field}")
+    report = json.loads((output / "novae_comparison.json").read_text())
+    assert not report["fixed_design"][f"{field}_identical"]
+    assert not report["acceptance"]["overall_accepted"]
+
+
+def test_missing_execution_provenance_rejects_acceptance(tmp_path):
+    args = _pair(tmp_path)
+    sensitivity = json.loads(args[3].read_text())
+    sensitivity["run"].pop("workers")
+    args[3].write_text(json.dumps(sensitivity))
+    output = compare_runs(*args, tmp_path / "missing-execution-provenance")
+    report = json.loads((output / "novae_comparison.json").read_text())
+    assert not report["fixed_design"]["workers_identical"]
+    assert not report["acceptance"]["overall_accepted"]
+
+
+def test_deterministic_policy_mismatch_rejects_paired_acceptance(tmp_path):
+    args = _pair(tmp_path)
+    for manifest in (args[2], args[3]):
+        payload = json.loads(manifest.read_text())
+        payload["run"].update({"accelerator": "cpu", "workers": 0,
+                               "deterministic_policy": {"requested": True, "effective": True}})
+        manifest.write_text(json.dumps(payload))
+    sensitivity = json.loads(args[3].read_text())
+    sensitivity["run"]["deterministic_policy"]["effective"] = False
+    args[3].write_text(json.dumps(sensitivity))
+    output = compare_runs(*args, tmp_path / "mismatch-determinism")
+    report = json.loads((output / "novae_comparison.json").read_text())
+    assert not report["fixed_design"]["deterministic_policy_identical"]
+    assert not report["acceptance"]["overall_accepted"]
 
 
 def test_fixed_design_mismatch_rejects_acceptance(tmp_path):
@@ -135,6 +179,38 @@ def test_sensitivity_and_comparison_launchers_render_fixed_protocol(tmp_path):
     assert "novae_resolved_manifest_skin_visium_ssc_nominal_100um_sensitivity.json" in compare_text
     unsafe = {**cenv, "NOVAE_COMPARISON_LOG_DIR": str(tmp_path / "unsafe path")}
     assert subprocess.run(["bash", str(compare), "--render-only"], env=unsafe, capture_output=True).returncode == 2
+
+
+def test_paired_cpu_launcher_renders_both_arms_and_is_fail_closed(tmp_path):
+    root = Path(__file__).parents[1]
+    script = root / "scripts" / "submit_novae_paired_cpu_diagnostic.sh"
+    env = {**os.environ, "NOVAE_REPO_DIR": str(root),
+           "NOVAE_PAIRED_RUN_ROOT": str(tmp_path / "run"),
+           "NOVAE_PAIRED_INPUT_H5AD": str(tmp_path / "source.h5ad"),
+           "NOVAE_PAIRED_ORIGINAL_MANIFEST": str(tmp_path / "original.csv"),
+           "NOVAE_PAIRED_SCALE_MANIFEST": str(tmp_path / "scales.csv"),
+           "NOVAE_PAIRED_MODEL_PATH": str(tmp_path / "model")}
+    subprocess.run(["bash", str(script), "--render-only"], env=env, check=True, capture_output=True, text=True)
+    rendered = (tmp_path / "run" / "submit_novae_paired_cpu_diagnostic.sbatch").read_text()
+    assert "#SBATCH --cpus-per-task=1" in rendered and "#SBATCH --nodes=1" in rendered
+    assert "#SBATCH --mem=96gb" in rendered and "--gres" not in rendered
+    assert rendered.count("--accelerator cpu") == 2 and rendered.count("--workers 0") == 2
+    assert rendered.count("--deterministic") == 2
+    assert "--coordinate-strategy visium_manifest" in rendered
+    assert "--physical-spot-diameter-um 55.0 --graph-radius-um 100" in rendered
+    assert "--coordinate-strategy visium_explicit_scale" in rendered
+    assert "--graph-radius-um" in rendered and rendered.count("--graph-radius-um") == 1
+    assert "compare_novae_runs.py" in rendered
+    bad = {**env, "NOVAE_WORKERS": "2"}
+    assert subprocess.run(["bash", str(script), "--render-only"], env=bad, capture_output=True).returncode == 2
+    conflict = {**env, "NOVAE_OUTPUT_DIR": str(tmp_path / "leak")}
+    assert subprocess.run(["bash", str(script), "--render-only"], env=conflict, capture_output=True).returncode == 2
+    unsafe = {**env, "NOVAE_PAIRED_LOG_DIR": str(tmp_path / "unsafe path")}
+    assert subprocess.run(["bash", str(script), "--render-only"], env=unsafe, capture_output=True).returncode == 2
+    existing = tmp_path / "existing-output"
+    existing.mkdir()
+    blocked = {**env, "NOVAE_PAIRED_ORIGINAL_OUTPUT_DIR": str(existing)}
+    assert subprocess.run(["bash", str(script), "--render-only"], env=blocked, capture_output=True).returncode == 2
 
 
 def test_compare_parser_and_cli_reject_protocol_overrides(tmp_path):

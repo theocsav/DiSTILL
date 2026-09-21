@@ -1245,6 +1245,51 @@ def _seed_everything(seed: int) -> None:
         pass
 
 
+def _configure_deterministic_execution(requested: bool) -> dict[str, Any]:
+    """Enable and verify Torch deterministic execution when explicitly requested."""
+    policy: dict[str, Any] = {
+        "requested": bool(requested),
+        "effective": False,
+        "algorithm_mode": "disabled",
+        "backend_settings": {},
+    }
+    if not requested:
+        return policy
+    try:
+        import torch
+    except ImportError as exc:
+        raise NovaPilotError("deterministic execution was requested but torch is unavailable") from exc
+    try:
+        torch.use_deterministic_algorithms(True)
+        if not bool(torch.are_deterministic_algorithms_enabled()):
+            raise NovaPilotError("Torch did not enable deterministic algorithms")
+        policy["algorithm_mode"] = "error"
+        backend_settings: dict[str, bool] = {}
+        cudnn = getattr(getattr(torch, "backends", None), "cudnn", None)
+        if cudnn is not None:
+            cudnn.deterministic = True
+            cudnn.benchmark = False
+            backend_settings.update({"cudnn_deterministic": bool(cudnn.deterministic),
+                                     "cudnn_benchmark": bool(cudnn.benchmark)})
+            if hasattr(cudnn, "allow_tf32"):
+                cudnn.allow_tf32 = False
+                backend_settings["cudnn_allow_tf32"] = bool(cudnn.allow_tf32)
+        cuda_matmul = getattr(getattr(torch, "backends", None), "cuda", None)
+        matmul = getattr(cuda_matmul, "matmul", None)
+        if matmul is not None and hasattr(matmul, "allow_tf32"):
+            matmul.allow_tf32 = False
+            backend_settings["cuda_matmul_allow_tf32"] = bool(matmul.allow_tf32)
+        policy["backend_settings"] = backend_settings
+        policy["effective"] = bool(torch.are_deterministic_algorithms_enabled())
+        if not policy["effective"]:
+            raise NovaPilotError("deterministic execution was requested but is not effective")
+    except NovaPilotError:
+        raise
+    except Exception as exc:
+        raise NovaPilotError(f"could not enable deterministic Torch execution: {exc}") from exc
+    return policy
+
+
 def _resolve_model(model_source: str, model_revision: str | None) -> tuple[Path, dict[str, Any]]:
     source = Path(model_source).expanduser()
     if source.exists():
@@ -1386,6 +1431,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--accelerator", default="cpu")
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--deterministic", action="store_true",
+                        help="Opt in to fail-closed deterministic Torch algorithms and backend settings.")
     parser.add_argument("--coordinate-strategy", required=True,
                         choices=("materialized_microns", "shared_scalar", "visium_manifest", "visium_explicit_scale"))
     parser.add_argument("--scale-to-microns", type=float, default=None)
@@ -1430,6 +1477,9 @@ def _run_impl(args: argparse.Namespace) -> int:
     args.min_domain_assignment_coverage = min_coverage
     args.resolutions = resolutions
     args.primary_resolution = primary_resolution
+    deterministic_policy = _configure_deterministic_execution(
+        bool(getattr(args, "deterministic", False))
+    )
     if args.coordinate_strategy == "shared_scalar":
         if args.scale_to_microns is None or not np.isfinite(args.scale_to_microns) or args.scale_to_microns <= 0:
             raise NovaPilotError("shared_scalar requires one positive --scale-to-microns")
@@ -1524,6 +1574,7 @@ def _run_impl(args: argparse.Namespace) -> int:
             "runtime": audit_runtime,
             "runtime_packages": audit_runtime["packages"],
             "torch_runtime": audit_runtime.get("torch"),
+            "deterministic_policy": deterministic_policy,
             "resolved_settings": {key: str(value) for key, value in vars(args).items()},
         }
         audit_artifacts = {
@@ -1721,6 +1772,7 @@ def _run_impl(args: argparse.Namespace) -> int:
         "runtime_packages": runtime_provenance["packages"],
         "torch_runtime": runtime_provenance.get("torch"),
         "accelerator": args.accelerator, "device": _runtime_device(args.accelerator), "workers": args.workers, "seed": args.seed,
+        "deterministic_policy": deterministic_policy,
         "requested_resolutions": {resolution_token(value): value for value in resolutions},
         "primary_resolution": primary_resolution,
         "neighborhood_valid_key": NEIGHBORHOOD_VALID_KEY,
