@@ -102,11 +102,13 @@ local `--model-source` directory, `--model-revision` is requested provenance
 only: `revision_verified` remains false, and the content/file hashes are
 authoritative unless a separately verified sidecar or cache identity exists.
 
-## Optional audit (not an HPG run)
+## Historical pilot audit path (synthetic/local fixtures only)
 
-The audit is optional and validates IDs, slide boundaries, coordinates, and
-calibration without loading NOVAE or a model. It is audit-only, not a scheduled
-HPG job:
+The following pilot audit path is retained for provenance and documents the
+older validation contract. Do not execute it against real HPG data or from an
+HPG login node; full real-data processing must use the scheduled launcher
+below. It validates IDs, slide boundaries, coordinates, and calibration
+without loading NOVAE or a model:
 
 ```bash
 python scripts/run_novae_pilot.py \
@@ -156,6 +158,43 @@ For each observed
 `microns_per_pixel = 55.0 / spot_diameter_fullres`. The resolved coordinate
 mapping, source key, per-slide factors, and ranges are written to the audit
 JSON/CSV; no pixel-to-micron factor is guessed.
+
+## Read-only H5AD QC audit (SLURM only)
+
+Full H5AD reads are experimental/data-processing work and must run through
+SLURM, never on an HPG login node. The CPU audit compares the baseline source
+and successful annotated H5AD, computes raw row sums and graph/component QC,
+and emits zero-count, invalid-neighborhood, validity cross-tab, per-slide, and
+JSON outputs without filtering or mutating either input. Render and submit it
+from a login node; only the generated job opens the H5AD files:
+
+```bash
+scripts/submit_novae_h5ad_qc.sh --render-only  # inspect, do not process data
+scripts/submit_novae_h5ad_qc.sh                # submit one CPU SLURM job
+```
+
+The launcher defaults to the completed-run paths above and refuses an existing
+final output directory. Override `NOVAE_SOURCE_H5AD`,
+`NOVAE_ANNOTATED_H5AD`, and `NOVAE_H5AD_QC_OUTPUT_DIR` for an explicitly
+reviewed alternate pair. It requests 64 GB RAM for the two full H5AD loads,
+one CPU, and no GPU. No calibration correction or sensitivity inference is
+selected by this audit.
+
+NOVAE remains a narrow test of the niche-assignment stage in the Myles Tan et
+al. (arXiv:2509.09923) workflow, not a divergent replacement. The downstream
+backbone remains per-FOV niche composition, Laplace-smoothed
+observed-vs-expected neighborhood enrichment, niche-specific mean gene
+expression with information-theoretic selection, grouped-by-subject MLP
+evaluation, permutation importance, and separate FCI-Stable analyses for
+composition, neighborhood, and niche-gene feature families. FIDE/JSD are NOVAE
+QC only. Visium spots/graphs and any pseudo-FOV units are minimal platform
+deviations from CosMx cells/FOVs; no downstream features are implemented here
+and all selection/evaluation stays patient-fold-safe.
+
+The raw Visium ZIPs are local, not on HPG. The source geometry audit remains
+ready for synthetic tests only; real source auditing waits for an explicit
+staging decision and a SLURM launcher. Do not upload the approximately 6 GB
+source set or run a real ZIP audit on an HPG login node.
 
 ## Submit
 

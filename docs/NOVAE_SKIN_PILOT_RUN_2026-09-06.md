@@ -223,3 +223,71 @@ validation and any full artifact rehash after archival belong in a scheduled
 SLURM job; compare there against the recorded SHA-256 values. Do **not** add
 these large H5AD/model artifacts to Git (the H5AD alone is approximately 804
 MiB); Git should retain code and this report, not large run binaries.
+
+## Follow-up QC phase: evidence only (2026-09)
+
+The next QC phase is deliberately read-only and does not select or apply a
+calibration correction or launch a sensitivity inference. NOVAE is being tested
+only as a possible niche-assignment-stage extension of Myles Tan et al.,
+*Engineering Spatial and Molecular Features from Cellular Niches to Inform
+Predictions of Inflammatory Bowel Disease* (arXiv:2509.09923); this work does
+not yet integrate NOVAE into that workflow or replace its downstream backbone.
+That backbone remains: per-FOV niche composition; observed-vs-expected
+neighborhood enrichment with Laplace-smoothed `log2((O+1)/(E+1))`;
+niche-specific mean gene expression with information-theoretic selection;
+grouped-by-subject MLP evaluation; permutation importance; and separate
+FCI-Stable analyses for composition, neighborhood, and niche-gene feature
+families. FIDE/JSD are NOVAE QC diagnostics, not replacement biological
+endpoints.
+
+For Visium, any later adaptation must state only the minimal platform-required
+deviations: spots and a spot graph instead of CosMx cells and FOVs, and
+pseudo-FOV construction where an FOV unit is required. Feature selection and
+evaluation remain patient-fold-safe (including any safeguards that strengthen
+the original design). No downstream feature proliferation is part of this QC
+phase.
+
+### H5AD cross-tab audit (submit through SLURM)
+
+`scripts/audit_novae_h5ad_qc.py` reads the baseline and annotated H5ADs,
+validates finite, nonnegative, integer-like raw counts before computing row
+sums, then audits graph degree/component size, `neighborhood_valid`, and every
+`novae_domains_res*` column, and publishes zero-count,
+invalid-neighborhood, zero-count/zero-degree/validity cross-tab, per-slide,
+and JSON outputs. It preserves NA domains and never filters or mutates an
+input. Full H5AD work is not permitted on an HPG login node:
+
+```bash
+cd /blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool
+scripts/submit_novae_h5ad_qc.sh --render-only   # inspect the job only
+scripts/submit_novae_h5ad_qc.sh                 # submit one CPU SLURM job
+```
+
+The launcher defaults to the source and successful annotated H5AD recorded
+above, one CPU, 64 GB, and one hour. Set `NOVAE_SOURCE_H5AD`,
+`NOVAE_ANNOTATED_H5AD`, and `NOVAE_H5AD_QC_OUTPUT_DIR` only when an explicit
+alternate pair/output is intended; the output directory must not already
+exist. A failed audit leaves no published final output directory.
+
+### Raw ZIP geometry audit (later, after staging decision)
+
+`scripts/audit_skin_visium_source_geometry.py` is ready for the 14 local raw
+Visium ZIPs (and excludes `Stereo_seq_*`). It reads only positions and
+scalefactor metadata, uses canonical array-coordinate hex neighbors, and can
+emit a clearly named `nominal_100um_array_pitch` sensitivity-candidate
+manifest. The audit reports observed canonical lattice edges, zero-degree
+positions, and connected components; these are topology diagnostics and do not
+claim to detect missing array sites. The nominal pitch is a sensitivity
+calibration, **not independent microscope calibration**. No correction has been
+selected or applied.
+
+The raw ZIPs are local and are not on HPG. Do not upload/stage the approximately
+6 GB source set or run a real ZIP audit on an HPG login node. No command
+against the real raw set is documented or authorized yet; only synthetic ZIP
+fixtures and lightweight tests may run locally. Real source auditing waits for
+an explicit staging decision and scheduled SLURM job.
+
+The proposed output is a sensitivity candidate scales file
+(`skin_visium_nominal_sensitivity_candidate_scales.csv`) with `sample_id`, not
+an operational input manifest; it must never overwrite the original sample
+manifest.
