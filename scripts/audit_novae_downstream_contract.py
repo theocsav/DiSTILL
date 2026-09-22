@@ -530,6 +530,9 @@ def audit_candidate(candidate: Candidate) -> dict[str, Any]:
 
     canonical: list[str] = table_indices.get("combined", [])
     composition_index = [str(value) for value in composition.index]
+    fov_lookup = pd.DataFrame(fov_rows).set_index("field_of_view") if fov_rows else pd.DataFrame()
+    structurally_zero_enrichment_ids: list[str] = []
+    structurally_zero_enrichment_fatal_ids: list[str] = []
     if "combined" in table_frames:
         _check(checks, "combined_nonempty", bool(canonical), f"canonical downstream rows={len(canonical)}")
         composition_set = set(composition_index)
@@ -538,11 +541,26 @@ def audit_candidate(candidate: Candidate) -> dict[str, Any]:
             if raw_name in table_indices:
                 raw_set = set(table_indices[raw_name])
                 comparison = _index_comparison(canonical, table_indices[raw_name], raw_name)
+                missing = comparison["missing"]
                 covers = set(canonical) <= raw_set
-                _check(checks, f"{raw_name}_contains_canonical", covers, f"missing={comparison['missing']} extras={comparison['extra']}")
+                if raw_name == "enrichment" and missing:
+                    for field_of_view in missing:
+                        cell_count = fov_lookup.loc[field_of_view, "cell_count"] if field_of_view in fov_lookup.index else None
+                        if cell_count is not None and int(cell_count) <= 1:
+                            structurally_zero_enrichment_ids.append(field_of_view)
+                        else:
+                            structurally_zero_enrichment_fatal_ids.append(field_of_view)
+                    enrichment_allowed = not structurally_zero_enrichment_fatal_ids
+                    _check(checks, "enrichment_structural_zero_missing", enrichment_allowed, f"allowed_singleton_ids={structurally_zero_enrichment_ids} fatal_ids={structurally_zero_enrichment_fatal_ids}")
+                    covers = enrichment_allowed
+                elif raw_name == "enrichment":
+                    _check(checks, "enrichment_structural_zero_missing", True, "no canonical enrichment rows are missing")
+                _check(checks, f"{raw_name}_contains_canonical", covers, f"missing={missing} extras={comparison['extra']}")
                 _check(checks, f"combined_subset_of_{raw_name}", covers, f"canonical combined rows are covered by {raw_name}")
                 _check(checks, f"{raw_name}_producer_order", comparison["order_equal"], "producer order is recorded only; order mismatch is allowed", required=False)
             else:
+                if raw_name == "enrichment":
+                    _check(checks, "enrichment_structural_zero_missing", False, "enrichment table is missing")
                 _check(checks, f"{raw_name}_contains_canonical", False, f"{raw_name} table is missing")
                 _check(checks, f"combined_subset_of_{raw_name}", False, f"{raw_name} table is missing")
         _reconcile_composition(checks, table_frames["combined"], composition.reindex(canonical))
@@ -564,7 +582,6 @@ def audit_candidate(candidate: Candidate) -> dict[str, Any]:
     if canonical:
         index_audit.append(_index_comparison(canonical, canonical, "combined_canonical"))
 
-    fov_lookup = pd.DataFrame(fov_rows).set_index("field_of_view") if fov_rows else pd.DataFrame()
     for name, value_column in (("targets", "target"), ("groups", "group")):
         if name not in table_frames:
             continue
@@ -582,7 +599,7 @@ def audit_candidate(candidate: Candidate) -> dict[str, Any]:
         except (ContractAuditError, KeyError) as exc:
             _check(checks, f"{name}_exact_values", False, str(exc))
 
-    fov_frame = pd.DataFrame(fov_rows)
+    fov_frame = pd.DataFrame(fov_rows).set_index("field_of_view") if fov_rows else pd.DataFrame()
     canonical_frame = fov_frame.reindex(canonical) if not fov_frame.empty else fov_frame
     counts = {
         "cell_rows": len(post_fov),
@@ -623,6 +640,15 @@ def audit_candidate(candidate: Candidate) -> dict[str, Any]:
         "row_intersections": row_intersections,
         "canonical_index": canonical,
         "excluded_post_fov_ids": sorted(set(composition_index) - set(canonical)),
+        "structurally_zero_enrichment_fov_ids": structurally_zero_enrichment_ids,
+        "structurally_zero_enrichment_fov_count": len(structurally_zero_enrichment_ids),
+        "structurally_zero_enrichment_fatal_fov_ids": structurally_zero_enrichment_fatal_ids,
+        "enrichment_zero_fill_policy": {
+            "formula_derived": True,
+            "formula": "log2((0+1)/(0+1))=0",
+            "not_label_imputation": True,
+            "reason": "missing enrichment rows are allowed only for FOVs with at most one post-NMF observation",
+        },
         "fov_rows": fov_rows,
         "index_comparisons": index_audit,
         "errors": errors,
@@ -634,8 +660,8 @@ def _comparison(results: list[dict[str, Any]]) -> dict[str, Any]:
     by_name = {result["name"]: result for result in results}
     historical = by_name.get("historical_164", {})
     fullsweep = by_name.get("fullsweep_225", {})
-    left = [row["field_of_view"] for row in historical.get("fov_rows", [])]
-    right = [row["field_of_view"] for row in fullsweep.get("fov_rows", [])]
+    left = [str(value) for value in historical.get("canonical_index", [])]
+    right = [str(value) for value in fullsweep.get("canonical_index", [])]
     left_set, right_set = set(left), set(right)
     return {
         "historical_fov_count": len(left),

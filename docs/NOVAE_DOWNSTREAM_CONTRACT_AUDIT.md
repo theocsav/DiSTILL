@@ -34,10 +34,16 @@ reconstructed exactly as `build_fov_classifier_inputs.py` does it: an
 combined table's row order is the frozen canonical downstream index; target and
 group indices and values must match it exactly. Raw enrichment and niche-gene
 tables must cover that index but may retain producer order and extra rows, which
-are recorded rather than treated as failures. Excluded post-NMF FOVs are
-recorded explicitly. The comparison file records exact FOV intersections and
-differences only; it does not infer an outcome-driven reason for 164 versus
-225.
+are recorded rather than treated as failures. Enrichment has one narrowly
+allowed exception: a missing canonical FOV is accepted only when its
+`post_nmf_obs` cell count is at most one. Such IDs/counts are recorded as
+structurally zero because the producer formula gives
+`log2((0+1)/(0+1)) = 0`; this is formula-derived downstream zero-fill, not
+label imputation. Any missing enrichment FOV with at least two observations is
+fatal. Niche-gene tables must always cover every canonical FOV. Excluded
+post-NMF FOVs are recorded explicitly. The comparison file compares canonical downstream FOV
+sets from the combined tables, recording their exact intersections, only-sets,
+and delta; it does not infer an outcome-driven reason for 164 versus 225.
 
 Acceptance requires every required check to pass. A valid completed historical
 164 contract is the preferred frozen comparison. The full-sweep contract is
@@ -48,3 +54,14 @@ integration remains blocked.
 A selected adapter must freeze the exact feature-column index, target values,
 and patient-group index from this audit. It must join calibrated NOVAE labels
 by preserved `obs`/`unique_cell_id`, never by retiling or reconstructing FOVs.
+
+## Current operational status
+
+The first attempted real audit was inconclusive because the NOVAE conda
+environment lacked a parquet engine; the launcher now defaults to the
+parquet-capable downstream `ibd_cosmx_k4` environment. Real rerun job 42944894
+completed the other checks, but found enrichment missing 14 historical and 18
+full-sweep canonical FOVs. Every missing FOV had exactly one observation and
+niche-gene coverage was complete, providing evidence for the narrowly defined
+structural-zero exception above. A corrected rerun is still required; no
+candidate is selected until it passes the updated audit.

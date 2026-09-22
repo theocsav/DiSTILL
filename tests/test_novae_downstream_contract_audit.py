@@ -14,7 +14,7 @@ import pytest
 ad = pytest.importorskip("anndata")
 
 import scripts.audit_novae_downstream_contract as audit_module
-from scripts.audit_novae_downstream_contract import Candidate, ContractAuditError, audit_candidate, run_audit
+from scripts.audit_novae_downstream_contract import Candidate, ContractAuditError, _comparison, audit_candidate, run_audit
 
 
 _PARQUET_ENGINE = bool(importlib.util.find_spec("pyarrow") or importlib.util.find_spec("fastparquet"))
@@ -60,6 +60,9 @@ def _fixture(
     disease_conflict=False,
     extra_composition=False,
     omit_nmf=False,
+    singleton_fov=False,
+    many_fovs=0,
+    enrichment_missing=None,
     raw_reverse=False,
     raw_extra=False,
     canonical_subset=False,
@@ -71,51 +74,70 @@ def _fixture(
     run = root / "run"
     (run / "MLP_FOVFeatures_inputs").mkdir(parents=True)
     ids = ["P1_A_1", "P1_A_2", "P2_B_1", "P2_B_2"]
+    patients = ["P1", "P1", "P2", "P2"]
+    fovs = ["A", "A", "B", "B"]
+    diseases = ["healthy", "healthy", "case", "case"]
+    if singleton_fov:
+        ids.append("P3_C_1")
+        patients.append("P3")
+        fovs.append("C")
+        diseases.append("case")
+    for number in range(4, 4 + many_fovs):
+        ids.append(f"P{number}_F_1")
+        patients.append(f"P{number}")
+        fovs.append("F")
+        diseases.append("case")
     obs = pd.DataFrame(
         {
-            "patient": ["P1", "P1", "P2", "P2"],
-            "fov": ["A", "A", "B", "B"],
-            disease_key: ["healthy", "healthy", "case", "case"],
+            "patient": patients,
+            "fov": fovs,
+            disease_key: diseases,
             "unique_cell_id": ids,
         },
         index=ids,
     )
-    ad.AnnData(X=np.ones((4, 2)), obs=obs).write_h5ad(source_path)
+    ad.AnnData(X=np.ones((len(ids), 2)), obs=obs).write_h5ad(source_path)
     nmf_obs = obs.copy()
-    nmf_obs["NMF_factor"] = ["0", "1", "0", "1"]
+    nmf_factors = ["0", "1", "0", "1"] + (["0"] if singleton_fov else []) + (["0"] * many_fovs)
+    nmf_obs["NMF_factor"] = nmf_factors
     if not omit_nmf:
-        nmf_obs["dominant_nmf_factor"] = ["0", "1", "0", "1"]
+        nmf_obs["dominant_nmf_factor"] = nmf_factors
     if patient_conflict:
         nmf_obs.iloc[0, nmf_obs.columns.get_loc("patient")] = "P9"
-        nmf_obs["field_of_view"] = ["P1_A", "P1_A", "P2_B", "P2_B"]
+        nmf_obs["field_of_view"] = [f"{patient}_{fov}" for patient, fov in zip(patients, fovs, strict=True)]
     if disease_conflict:
         nmf_obs.iloc[0, nmf_obs.columns.get_loc(disease_key)] = "case"
-        nmf_obs["field_of_view"] = ["P1_A", "P1_A", "P2_B", "P2_B"]
+        nmf_obs["field_of_view"] = [f"{patient}_{fov}" for patient, fov in zip(patients, fovs, strict=True)]
     if misalign:
-        nmf_obs = nmf_obs.iloc[[1, 0, 2, 3]]
-    ad.AnnData(X=np.ones((4, 2)), obs=nmf_obs).write_h5ad(run / "cosmx_with_nmf.h5ad")
+        nmf_obs = nmf_obs.iloc[[1, 0, *range(2, len(ids))]]
+    ad.AnnData(X=np.ones((len(ids), 2)), obs=nmf_obs).write_h5ad(run / "cosmx_with_nmf.h5ad")
 
     post = obs.reset_index(drop=True)
-    post["NMF_factor"] = ["0", "1", "0", "1"]
+    post["NMF_factor"] = nmf_factors
     if conflict:
         post.loc[1, disease_key] = "case"
     post.to_csv(run / "post_nmf_obs.csv", index=False)
 
-    all_fovs = ["P1_A", "P2_B"]
+    all_fovs = ["P1_A", "P2_B"] + (["P3_C"] if singleton_fov else []) + [f"P{number}_F" for number in range(4, 4 + many_fovs)]
     canonical = ["P1_A"] if canonical_subset else all_fovs
     raw_index = list(reversed(all_fovs)) if raw_reverse else list(all_fovs)
+    if enrichment_missing:
+        raw_index = [fov for fov in raw_index if fov not in set(enrichment_missing)]
     if raw_extra:
-        raw_index.append("P3_C")
+        raw_index.append("P4_D")
     raw_values = np.arange(len(raw_index), dtype=float)
     pd.DataFrame({"enrichment_0": raw_values}, index=pd.Index(raw_index, name="field_of_view")).to_csv(
         run / "enrichment_features_fov.csv"
     )
+    niche_index = list(reversed(all_fovs)) if raw_reverse else list(all_fovs)
+    if raw_extra:
+        niche_index.append("P4_D")
     _write_parquet(
-        pd.DataFrame({"niche_0": raw_values + 1}, index=pd.Index(raw_index, name="field_of_view")),
+        pd.DataFrame({"niche_0": np.arange(len(niche_index), dtype=float) + 1}, index=pd.Index(niche_index, name="field_of_view")),
         run / "niche_gene_features_fov.parquet",
     )
 
-    props = composition or {"P1_A": (0.5, 0.5), "P2_B": (0.5, 0.5)}
+    props = composition or {fov: ((0.5, 0.5) if fov in {"P1_A", "P2_B"} else (1.0, 0.0)) for fov in all_fovs}
     combined_data = {
         "nmf_prop_0": [props[fov][0] for fov in canonical],
         "nmf_prop_1": [props[fov][1] for fov in canonical],
@@ -155,7 +177,7 @@ def test_raw_reorder_and_extra_rows_are_allowed(tmp_path):
     result = audit_candidate(_fixture(tmp_path, raw_reverse=True, raw_extra=True))
     assert result["accepted"]
     enrichment = next(row for row in result["index_comparisons"] if row["artifact"] == "enrichment")
-    assert enrichment["extra"] == ["P3_C"] and not enrichment["order_equal"]
+    assert enrichment["extra"] == ["P4_D"] and not enrichment["order_equal"]
 
 
 def test_canonical_target_or_group_reorder_is_rejected(tmp_path):
@@ -168,6 +190,41 @@ def test_canonical_subset_is_accepted_and_exclusions_are_recorded(tmp_path):
     assert result["accepted"]
     assert result["excluded_post_fov_ids"] == ["P2_B"]
     assert result["counts"]["excluded_post_fov_rows"] == 1
+    assert result["counts"]["canonical_patients"] == 1
+    assert result["counts"]["all_post_fov_patients"] == 2
+
+
+def test_candidate_comparison_uses_canonical_index_not_all_post_fovs(tmp_path):
+    result = audit_candidate(_fixture(tmp_path, canonical_subset=True))
+    comparison = _comparison([result])
+    assert comparison["historical_fov_count"] == 1
+    assert comparison["historical_only"] == ["P1_A"]
+    assert comparison["fullsweep_fov_count"] == 0
+
+
+def test_singleton_missing_enrichment_is_structurally_zero_and_accepted(tmp_path):
+    result = audit_candidate(_fixture(tmp_path, singleton_fov=True, enrichment_missing=["P3_C"]))
+    assert result["accepted"]
+    assert result["structurally_zero_enrichment_fov_ids"] == ["P3_C"]
+    assert result["structurally_zero_enrichment_fov_count"] == 1
+    assert result["enrichment_zero_fill_policy"]["formula_derived"]
+    assert result["enrichment_zero_fill_policy"]["not_label_imputation"]
+
+
+def test_multi_cell_missing_enrichment_is_fatal(tmp_path):
+    result = audit_candidate(_fixture(tmp_path, enrichment_missing=["P1_A"]))
+    assert not result["accepted"]
+    assert _failed(result, "enrichment_structural_zero_missing")
+    assert result["structurally_zero_enrichment_fatal_fov_ids"] == ["P1_A"]
+
+
+def test_canonical_counts_are_reported_for_fourteen_patient_synthetic_cohort(tmp_path):
+    result = audit_candidate(_fixture(tmp_path, many_fovs=12))
+    assert result["accepted"]
+    assert result["counts"]["canonical_patients"] == 14
+    assert result["counts"]["canonical_classes"] == 2
+    assert result["counts"]["all_post_fov_patients"] == 14
+    assert result["counts"]["canonical_fov_rows"] == 14
 
 
 @pytest.mark.parametrize(
@@ -286,5 +343,6 @@ def test_launcher_render_and_injection_rejection(tmp_path):
     rendered = job.read_text()
     assert "--cpus-per-task=1" in rendered and "--mem=64gb" in rendered
     assert "gpu" not in rendered.lower() and "audit_novae_downstream_contract.py" in rendered
+    assert "conda/envs/ibd_cosmx_k4" in rendered
     rejected = subprocess.run([str(script), "--render-only"], env={**env, "NOVAE_ACCOUNT": "safe;rm"}, text=True, capture_output=True)
     assert rejected.returncode != 0
