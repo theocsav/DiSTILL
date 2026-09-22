@@ -21,7 +21,7 @@ reject_conflict NOVAE_PRIMARY_RESOLUTION "1.0"
 reject_conflict NOVAE_DOMAIN_KEY "novae_domains_res1.0"
 reject_conflict NOVAE_VALIDITY_KEY "neighborhood_valid"
 reject_conflict NOVAE_ACCELERATOR "cpu"
-reject_conflict NOVAE_CPUS_PER_TASK "4"
+reject_conflict NOVAE_CPUS_PER_TASK "2"
 validate() { local n="$1" v="$2"; [[ -n "$v" && "$v" != *$'\n'* && "$v" != *$'\r'* && "$v" =~ ^[A-Za-z0-9._:/-]+$ ]] || { echo "$n contains unsafe characters" >&2; exit 2; }; }
 for p in "NOVAE_REPO_DIR:$REPO_DIR" "NOVAE_FOV_BASE_H5AD:$BASE_H5AD" "NOVAE_FOV_NOVAE_H5AD:$NOVAE_H5AD" "NOVAE_FOV_FEATURE_DIR:$FEATURE_DIR" "NOVAE_FOV_SOURCE_OUTPUT_DIR:$SOURCE_DIR" "NOVAE_FOV_RUN_ROOT:$RUN_ROOT" "NOVAE_FOV_OUTPUT_DIR:$OUTPUT_DIR" "NOVAE_FOV_LOG_DIR:$LOG_DIR" "NOVAE_FOV_JOB_SCRIPT:$JOB_SCRIPT" "NOVAE_FOV_CONDA_ENV:$CONDA_ENV"; do validate "${p%%:*}" "${p#*:}"; done
 for p in "NOVAE_ACCOUNT:$ACCOUNT" "NOVAE_QOS:$QOS" "NOVAE_FOV_TIME:$TIME_LIMIT"; do validate "${p%%:*}" "${p#*:}"; done
@@ -37,7 +37,7 @@ cat > "$TMP" <<EOF
 #SBATCH --output=$LOG_DIR/novae_fov_features_%j.out
 #SBATCH --error=$LOG_DIR/novae_fov_features_%j.err
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=2
 #SBATCH --nodes=1
 #SBATCH --mem=96gb
 #SBATCH --time=$TIME_LIMIT
@@ -50,7 +50,7 @@ source "\$(conda info --base)/etc/profile.d/conda.sh"
 set +u; conda activate "$CONDA_ENV"; set -u
 cd "$REPO_DIR"
 [[ ! -e "$OUTPUT_DIR" ]] || { echo "refusing existing output: $OUTPUT_DIR" >&2; exit 2; }
-export OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 NUMEXPR_NUM_THREADS=4 PYTHONHASHSEED=42
+export OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 NUMEXPR_NUM_THREADS=2 PYTHONHASHSEED=42
 export CUDA_VISIBLE_DEVICES="" NVIDIA_VISIBLE_DEVICES="void"
 python scripts/build_novae_fov_features.py --base-h5ad "$BASE_H5AD" --novae-h5ad "$NOVAE_H5AD" --feature-dir "$FEATURE_DIR" --source-output-dir "$SOURCE_DIR" --output-dir "$OUTPUT_DIR" --expected-domains L0,L1,L2,L3,L4,L5,L6,L7,L8
 EOF

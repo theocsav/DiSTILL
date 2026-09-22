@@ -152,8 +152,8 @@ def test_launcher_renders_cpu_contract(tmp_path):
     result = subprocess.run(command, env={**__import__("os").environ, **env}, capture_output=True, text=True, check=True)
     assert "Rendered sbatch script" in result.stdout
     rendered = (root / "job.sbatch").read_text()
-    assert "--cpus-per-task=4" in rendered
-    assert "export OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 NUMEXPR_NUM_THREADS=4 PYTHONHASHSEED=42" in rendered
+    assert "--cpus-per-task=2" in rendered
+    assert "export OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 NUMEXPR_NUM_THREADS=2 PYTHONHASHSEED=42" in rendered
     assert 'export CUDA_VISIBLE_DEVICES="" NVIDIA_VISIBLE_DEVICES="void"' in rendered
     assert "--expected-domains L0,L1,L2,L3,L4,L5,L6,L7,L8" in rendered
 
