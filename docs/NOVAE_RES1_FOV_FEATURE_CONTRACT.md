@@ -11,6 +11,25 @@ FOVs) and fullsweep225 (89 healthy/136 SSc, 14 patients, 18 singleton
 structural-zero enrichment FOVs), with canonical intersection 134. The
 predeclared policy selects **historical_164**, never performance.
 
+## Final execution evidence
+
+Initial adapter job **43012741** (`COMPLETED 0:0 38s`) is preserved only as a
+superseded provenance-serialization attempt: its manifest encoded NumPy scalar
+provenance values as strings. It is **not selected or frozen**.
+
+Typed v2 job **43012960**, commit **4260c62**, completed `0:0 29s` and produced
+the frozen exploratory adapter artifact at:
+
+`/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/novae_res1_fov_features_historical164_typed_v2/features`
+
+Independent SLURM read-back/hash verification job **43013228** completed
+`0:0 16s` and passed: 11 artifact hashes; 164 FOVs; 13,417 spots; 13,372
+assigned and 45 invalid spots; domains L0-L8; 9 composition, 81 enrichment,
+and 162,666 niche-gene features; 14 zero-assigned FOVs; 21 structural-zero
+FOVs after invalid exclusion; exact class/group contracts; and native typed
+provenance. The artifact remains exploratory and carries the `reference=all`
+warning; it is not confirmatory evidence.
+
 The standalone CPU adapter is `scripts/build_novae_fov_features.py`; its
 launcher is `scripts/submit_novae_fov_features.sh`. It uses the authoritative
 post-NMF `cosmx_with_nmf.h5ad` as the expression/metadata context and the
