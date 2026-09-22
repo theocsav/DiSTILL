@@ -332,52 +332,65 @@ with `sample_id`; it was not to overwrite the original sample manifest. The
 reviewed 42852404 factors are now separately versioned at
 `presets/novae_nominal_100um_scales.csv` for the named sensitivity only.
 
-## Predeclared paired CPU calibration diagnostic (pending execution)
+## Completed paired CPU calibration diagnostic (job 42891547)
 
-The earlier GPU comparison was `overall_accepted` under the technical contract
-that existed then, but baseline workers=8 versus sensitivity workers=2 is a
-runtime confound. It is not sufficient for isolated calibration acceptance.
-The approved replacement is `scripts/submit_novae_paired_cpu_diagnostic.sh`:
-one SLURM node, one CPU, 96 GB, no GPU GRES, and sequential original and
-calibrated arms in one process environment. Both arms use the same source H5AD,
-cached checkpoint/revision, raw counts, seed 42, resolutions 0.5/1.0/2.0,
-primary 1.0, expected distance 100 µm, tolerance 0.5, coverage 0.70,
-`sample_id`/`patient`, `reference=all`, CPU, workers=0, and fail-closed
-Torch deterministic execution. The original arm exactly uses
-`visium_manifest`, the original manifest, 55 µm spot diameter, and 100 µm
-radius pruning. The calibrated arm uses `visium_explicit_scale`, the reviewed
-versioned scale preset, and no radius pruning. Outputs and dataset identities
-are distinct; comparison runs only after both transactional outputs succeed.
+The replacement diagnostic completed on HPG with commit `45d1231`, runtime
+`3:52`, and exit code `0`. It was one sequential, one-CPU, 96 GB, CPU-only
+job with workers=0 and fail-closed Torch deterministic execution. The original
+arm used `visium_manifest`, the immutable original manifest, 55 µm spot
+diameter, and 100 µm pruning. The calibrated arm used
+`visium_explicit_scale`, the reviewed versioned scale preset, and no radius
+pruning. Both used the same source H5AD/checkpoint, raw counts, seed 42,
+resolutions 0.5/1.0/2.0, predeclared primary 1.0, `sample_id`/`patient`, and
+`reference=all`.
 
-The earlier GPU comparison observed identical graph topology (38,107
-undirected edges; SHA-256 `f8806398afd08dfd538feb5593d1d9a6723b11f4fab62a9c4af205b993472369`), mean latent cosine `0.99994935`, and
-these common-valid domain metrics:
+Exact HPG outputs are:
 
-| Resolution | ARI | NMI | Baseline FIDE → sensitivity FIDE | Baseline JSD → sensitivity JSD |
-|---|---:|---:|---:|---:|
-| 0.5 | 0.58034227 | 0.63369739 | 0.70962546 → 0.75691570 | 0.06096971 → 0.03982476 |
-| 1.0 | 0.52573945 | 0.61894851 | 0.57881840 → 0.55868906 | 0.14938784 → 0.13902419 |
-| 2.0 | 0.46975010 | 0.65062489 | 0.45887614 → 0.47276038 | 0.28268963 → 0.26369173 |
+- Original H5AD: `/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/novae_skin_pilot/paired_cpu_diagnostic/skin_visium_ssc_paired_cpu_original/novae_skin_visium_ssc_paired_cpu_original_zero_shot.h5ad`
+- Original manifest: `/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/novae_skin_pilot/paired_cpu_diagnostic/skin_visium_ssc_paired_cpu_original/novae_resolved_manifest_skin_visium_ssc_paired_cpu_original.json`
+- Calibrated H5AD: `/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/novae_skin_pilot/paired_cpu_diagnostic/skin_visium_ssc_paired_cpu_calibrated/novae_skin_visium_ssc_paired_cpu_calibrated_zero_shot.h5ad`
+- Calibrated manifest: `/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/novae_skin_pilot/paired_cpu_diagnostic/skin_visium_ssc_paired_cpu_calibrated/novae_resolved_manifest_skin_visium_ssc_paired_cpu_calibrated.json`
 
-Those values came from the earlier technically accepted GPU comparison, not
-from the paired CPU diagnostic; workers=8 versus workers=2 remains a runtime
-confound. The paired report is the source of the replacement observed values.
-No calibrated output has been chosen and downstream domains remain blocked.
+The comparison was `overall_accepted=true` under the technical/predeclared
+contract: exact row/variable alignment and validity masks, identical CPU and
+worker settings, effective deterministic policy, graph identity, finite
+metrics, coverage at least 0.70 overall/per slide, no valid missing labels, and
+all FIDE/JSD pairs available. Graph identity was **38,107 undirected edges**
+(76,214 directed entries) in each arm, edge difference 0, SHA-256
+`f8806398afd08dfd538feb5593d1d9a6723b11f4fab62a9c4af205b993472369`.
+Coverage was **13,372/13,417 assigned**, 45 invalid/unassigned, exactly
+`0.9966460460609674` overall in each arm; per-slide coverage was identical,
+with minimum `0.9640914036996736` (SSc5380) and maximum `1.0`.
 
-Baseline source H5AD is
-`/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_visium_ssc_spatial.h5ad`;
-its resolved manifest is
-`/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/novae_skin_pilot/h5ad-provenance-fix-20260906_024602/novae_resolved_manifest_skin_visium_ssc.json`.
-The geometry evidence output is `h5ad-qc-geometry-20260921_161419` from job 42852404.
+The 64-dimensional latent comparison used 13,372 common valid rows: mean
+cosine `0.9999493502634798`, median `0.9999688551454986`, minimum
+`0.9993413300202437`; direct L2 mean/median/maximum were
+`0.024001619013860682` / `0.02217326523502287` / `0.09574225961710948`.
+Common-valid domain metrics and official FIDE/JSD diagnostics were:
 
-No explicit radius pruning is predeclared: baseline pruning removed zero edges
-and canonical NOVAE Visium graph construction is coordinate-scale-independent.
-This rationale is intended to hold topology fixed and avoid median-at-100
-rounding; it is not evidence that topologies match. The CPU-only
-`scripts/submit_novae_comparison.sh` must compare the published baseline and
-sensitivity edge sets before any topology identity is claimed. Its atomic,
-read-only report accepts only exact row/var alignment, graph identity,
-coverage >=0.70 overall/per slide, no valid missing labels, finite metrics, and
-available latent/domain/FIDE/JSD comparisons. `overall_accepted` is only the
-technical and predeclared comparison contract, not a biological domain-stability
-claim; no ARI/NMI equivalence threshold is predeclared.
+| Resolution | Domain counts (original → calibrated) | ARI | NMI | FIDE (original → calibrated) | JSD (original → calibrated) |
+|---|---:|---:|---:|---:|---:|
+| 0.5 | 5 → 4 | 0.5803422667503197 | 0.6336973876483613 | 0.7096254585734768 → 0.7569156966837998 | 0.06096970813074565 → 0.03982475586281686 |
+| 1.0 | 9 → 9 | 0.5257394451535925 | 0.61894851206938 | 0.578818397995689 → 0.5586890570835334 | 0.1493878445089467 → 0.13902419128664212 |
+| 2.0 | 17 → 17 | 0.4698345673846242 | 0.6507364430707315 | 0.45883936794440655 → 0.47276038322389363 | 0.2826464051146269 → 0.2636917306563915 |
+
+Identical topology does **not** mean identical NOVAE input: NOVAE consumes
+physical edge-distance weights, and the calibrated coordinates change those
+weights. The deterministic same-node CPU pair removes the prior GPU/worker
+confounding and is therefore the accepted calibration comparison. This remains
+technical/predeclared acceptance, not biological stability or ground truth.
+
+Decision: preserve the immutable original baseline. Use the nominal-100 µm
+calibrated result at the predeclared resolution 1.0 as the working exploratory
+input for downstream comparison, not as ground truth or independently measured
+microscope calibration. Do not select resolution by FIDE/JSD. Because both
+arms use `reference=all`, their cohort-derived domains are contaminated for
+confirmatory use; downstream confirmatory classification or biological claims
+remain prohibited. Predeclare the next exploratory stage as a minimal NMF
+niche-assignment replacement, preserving identical pseudo-FOVs, downstream
+features, patient-grouped nested CV, and fold-safe feature selection.
+
+The source H5AD, baseline resolved manifest, and geometry evidence remain as
+previously recorded above; the geometry evidence is
+`h5ad-qc-geometry-20260921_161419` from job 42852404. The paired comparison artifacts used for this report are under
+`/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/novae_skin_pilot/paired_cpu_diagnostic/paired_cpu_comparison`. The local copy is not authoritative.

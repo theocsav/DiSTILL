@@ -208,7 +208,7 @@ completed on SLURM; only the approximately 6 GB raw ZIP audit/staging remains
 deferred. Do not upload the raw ZIP set or run a real ZIP audit on an HPG login
 node.
 
-## Predeclared nominal-100um calibration sensitivity
+## Completed nominal-100um calibration sensitivity
 
 The reviewed 14-row candidate factors from geometry job **42852404** are
 versioned at `presets/novae_nominal_100um_scales.csv`. The dedicated
@@ -221,52 +221,40 @@ has a distinct dataset/output identity and selects
 missing, nonfinite, or nonpositive factors, preserves
 `obsm['spatial_original_px']`, and records per-slide ranges and provenance.
 
-The approved paired diagnostic supersedes that pending two-worker sensitivity
-for calibration acceptance. Render/inspect it with
-`scripts/submit_novae_paired_cpu_diagnostic.sh --render-only`, then submit the
-single CPU-only job only after review. It requests one node, one allocated CPU,
-96 GB, and no GPU GRES; it runs both arms sequentially in the same process
-environment with `workers=0`, seed 42, raw counts, and the opt-in fail-closed
-Torch deterministic policy. The original arm is exactly
-`visium_manifest` with the original sample manifest, 55 µm physical spot
-diameter, and 100 µm graph pruning. The calibrated arm is
-`visium_explicit_scale` with the reviewed versioned scale preset and no radius
-pruning. Each arm has a distinct immutable dataset/output identity, and the
-job invokes `compare_novae_runs.py` only after both transactional outputs
-exist. Test-only path substitutions use the dedicated `NOVAE_PAIRED_*`
-variables; scientific settings reject conflicting inherited overrides.
+The paired diagnostic completed as HPG job **42891547** (commit `45d1231`,
+exit `0`, runtime `3:52`). It used one node/CPU, 96 GB, no GPU, sequential
+original and calibrated arms, workers=0, and effective fail-closed Torch
+determinism. The original arm was `visium_manifest` with the original manifest,
+55 µm physical spot diameter, and 100 µm pruning; the calibrated arm was
+`visium_explicit_scale` with the reviewed scale preset and no radius pruning.
+The exact HPG H5AD and resolved-manifest paths are recorded in the [run
+report](NOVAE_SKIN_PILOT_RUN_2026-09-06.md).
 
-The calibrated arm deliberately omits explicit radius pruning. Baseline pruning
-removed zero edges, and NOVAE's canonical Visium graph construction is
-coordinate-scale-independent; omission holds graph topology fixed and avoids
-median-at-100 rounding. This is a predeclared rationale, not a topology claim.
-The comparison reads H5ADs backed without accessing expression `X`, compares
-exact row/variable IDs, graph edge hashes/diffs, validity/coverage, latent and
-resolution assignments, and manifest FIDE/JSD, then emits atomic JSON and
-concise CSVs. Its fixed-design report now requires identical accelerator and
-worker settings and records whether deterministic policy was requested and
-effective (old manifests without that policy remain legacy-compatible, but
-cannot establish a deterministic paired diagnostic). The earlier GPU
-comparison's `overall_accepted` was technical under the earlier contract;
-workers=8 versus workers=2 is a runtime confound, so it is not calibration
-acceptance. No calibrated output has been chosen and downstream domains remain
-blocked. For context, the earlier GPU comparison observed identical topology
-(38,107 undirected edges; SHA-256 `f8806398afd08dfd538feb5593d1d9a6723b11f4fab62a9c4af205b993472369`), mean latent cosine 0.99994935,
-ARI/NMI of 0.58034227/0.63369739, 0.52573945/0.61894851, and
-0.46975010/0.65062489 at resolutions 0.5/1.0/2.0, respectively. Its
-baseline→sensitivity FIDE/JSD pairs were 0.70962546→0.75691570 /
-0.06096971→0.03982476, 0.57881840→0.55868906 / 0.14938784→0.13902419, and
-0.45887614→0.47276038 / 0.28268963→0.26369173. Those are observed GPU
-values only; the worker mismatch is a runtime confound, so record the paired
-CPU job's replacement values separately and do not treat the old
-`overall_accepted` as calibration acceptance.
+The technical/predeclared comparison was `overall_accepted=true`: graph
+identity was 38,107 undirected edges (76,214 directed entries), edge diff 0,
+SHA-256 `f8806398afd08dfd538feb5593d1d9a6723b11f4fab62a9c4af205b993472369`;
+coverage was 13,372/13,417 (`0.9966460460609674`) in both arms, with identical
+per-slide coverage and no valid missing labels. The 64-D latent mean cosine was
+`0.9999493502634798`; exact ARI/NMI and FIDE/JSD values for resolutions
+0.5/1.0/2.0 are in the run report. Identical topology does not mean identical
+model input: NOVAE consumes physical edge-distance weights, which change under
+calibration. This deterministic same-node CPU pair removes GPU/worker
+confounding, but acceptance remains technical rather than biological stability.
 
-Recorded baseline paths are source H5AD
-`/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_visium_ssc_spatial.h5ad`
-and the completed run's resolved manifest
+Decision/status: preserve the immutable original baseline and use the nominal-
+100 µm calibrated result at predeclared resolution 1.0 as the working
+exploratory input for downstream comparison—not ground truth or independently
+measured microscope calibration. Do not select resolution by FIDE/JSD. Since
+`reference=all` uses cohort-derived prototypes, downstream confirmatory
+classification/claims remain prohibited. The next exploratory stage is a
+minimal NMF niche-assignment replacement preserving identical pseudo-FOVs,
+features, patient-grouped nested CV, and fold-safe feature selection.
+
+Recorded baseline source H5AD is
+`/blue/kejun.huang/vasco.hinostroza/data/skin_dataset/processed/skin_visium_ssc_spatial.h5ad`;
+its completed-run manifest is
 `/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/novae_skin_pilot/h5ad-provenance-fix-20260906_024602/novae_resolved_manifest_skin_visium_ssc.json`.
-Geometry evidence is the read-only H5AD QC output
-`h5ad-qc-geometry-20260921_161419` (job 42852404). Do not claim topology identity until comparison succeeds.
+Geometry evidence is `h5ad-qc-geometry-20260921_161419` (job 42852404).
 
 ## Submit
 
