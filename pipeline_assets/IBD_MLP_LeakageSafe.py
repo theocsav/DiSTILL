@@ -512,6 +512,10 @@ def _save_fixed_params(path: Path, params: dict, *, selection_score: float | Non
         "selection_metric": mlp_selection_metric,
         "grid_profile": mlp_grid_profile,
         "resampling": mlp_resampling,
+        "backend": mlp_backend,
+        "device": mlp_device,
+        "max_epochs": mlp_max_epochs,
+        "patience": mlp_patience,
         "best_params": _to_serializable_params(params),
     }
     if selection_score is not None:
@@ -653,6 +657,7 @@ try:
     print(f"MLP backend: {mlp_backend}")
     print(f"MLP device: {mlp_device}")
     print(f"MLP max epochs: {mlp_max_epochs}")
+    print(f"MLP patience: {mlp_patience}")
     print(f"MLP selection metric: {mlp_selection_metric}")
     print(f"MLP grid profile: {mlp_grid_profile}")
     print(f"MLP resampling: {mlp_resampling}")

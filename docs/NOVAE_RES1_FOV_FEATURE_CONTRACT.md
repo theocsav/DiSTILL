@@ -91,3 +91,25 @@ sets `NICHERUNNER_MLP_UNIT=fov` and
 `NICHERUNNER_COMPOSITION_PREFIX=novae_prop_`, passes the complete enrichment and
 niche candidate tables, and performs mutual-information selection inside each
 outer training fold. No global ranked feature file is used.
+
+## Historical-164 paired NMF-only comparison
+
+`scripts/run_novae_nmf_comparison.py` and
+`scripts/submit_novae_nmf_comparison.sh` implement the frozen, CPU-only paired
+comparison. Both arms use the exact 164-row canonical index, targets, patient
+LOGO folds, compact sklearn nested-CV grid, weighted-F1 inner selection, no
+resampling, threshold 0.5, 1,000 epochs, patience 20, top 5 enrichment/top 20
+niche candidates, seed 42, and SHAP off. The NMF arm selects only
+`nmf_prop_*`; unrelated legacy columns in its combined table are ignored. The
+NOVAE arm selects only `novae_prop_*`; columns are never aliased.
+
+The orchestrator validates the frozen manifest and every listed output hash,
+checks candidate row sets and the authoritative `post_nmf_obs` mapping, runs
+both arms concurrently with one thread each, and publishes only through a
+staging-directory rename after prediction alignment and pooled metric checks.
+It refuses inherited conflicting `NICHERUNNER_*` settings and existing output
+folders. The resulting manifest records selected composition columns and code,
+input, and output hashes. NOVAE remains exploratory (`reference=all`), so the
+paired FOV rows are not independent observations and no FOV-level significance
+or p-value claim is made; this is a new paired comparison and does not reproduce
+any prior 0.608467 result.
