@@ -18,7 +18,13 @@ The agreed sequence is:
 4. runner/API/UI preset integration only if the go criteria below pass.
 
 Until step 4 is approved, NOVAE artifacts are produced and consumed outside
-the canonical production stages.
+the canonical production stages. The downstream 164-row historical versus
+225-row full-sweep contract is an evidence gate before feature integration:
+primary remains blocked until `docs/NOVAE_DOWNSTREAM_CONTRACT_AUDIT.md` passes.
+Never choose a contract by classifier performance. A selected adapter must
+freeze the exact feature index, targets, and patient groups, then join
+calibrated NOVAE labels by preserved observation/`unique_cell_id` rather than
+retiling.
 
 ## Confirmed NOVAE behavior and dependencies
 
