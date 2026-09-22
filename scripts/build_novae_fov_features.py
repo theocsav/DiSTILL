@@ -16,6 +16,7 @@ import re
 import shutil
 import tempfile
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any, Iterable
 
 import numpy as np
@@ -36,6 +37,21 @@ _DOMAIN_RE = re.compile(r"^L\d+$")
 
 class ContractError(ValueError):
     """Raised when an input violates the frozen adapter contract."""
+
+
+def _json_native(value: Any) -> Any:
+    """Convert nested NumPy/AnnData scalar containers to strict JSON natives."""
+    if isinstance(value, Mapping):
+        return {str(key): _json_native(item) for key, item in value.items()}
+    if isinstance(value, np.ndarray):
+        return _json_native(value.tolist())
+    if isinstance(value, np.generic):
+        return _json_native(value.item())
+    if isinstance(value, (list, tuple)):
+        return [_json_native(item) for item in value]
+    if isinstance(value, Path):
+        return str(value)
+    return value
 
 
 def natural_domain_order(values: Iterable[Any]) -> list[str]:
@@ -534,7 +550,8 @@ def build_from_adatas(base: Any, novae: Any, feature_dir: Path, source_output_di
             for path in sorted(temp.iterdir())
             if path.name != "novae_feature_manifest.json"
         }
-        (temp / "novae_feature_manifest.json").write_text(json.dumps(manifest, indent=2, default=str) + "\n", encoding="utf-8")
+        manifest = _json_native(manifest)
+        (temp / "novae_feature_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         if output_dir.exists():
             raise ContractError(f"refusing to overwrite existing output directory: {output_dir}")
         os.replace(temp, output_dir)

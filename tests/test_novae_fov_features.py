@@ -15,6 +15,7 @@ from scripts.build_novae_fov_features import (
     VALIDITY_KEY,
     _assert_finite_matrix,
     _domain_assignments,
+    _json_native,
     _validate_fov_consistency,
     _validate_provenance,
     composition_features,
@@ -58,6 +59,17 @@ def test_enrichment_does_not_leak_between_fovs_and_singleton_is_zero():
     other = _assignments().copy()
     other.loc["c2", "CenterX_global_px"] = 0.0
     assert result.loc["p1_a"].equals(enrichment_features(other, pd.Index(["p1_a", "p2_a", "p2_b"]), ["L0", "L1"]).loc["p1_a"])
+
+
+def test_json_native_round_trips_numpy_provenance_types():
+    import json
+
+    payload = _json_native({"flag": np.bool_(True), "workers": np.int64(2), "scale": np.float64(1.5), "nested": np.array([np.int64(1), np.bool_(False)])})
+    round_tripped = json.loads(json.dumps(payload))
+    assert type(round_tripped["flag"]) is bool
+    assert type(round_tripped["workers"]) is int
+    assert type(round_tripped["scale"]) is float
+    assert round_tripped["nested"] == [1, False]
 
 
 def test_backed_sparse_matrix_finite_and_nonfinite():
