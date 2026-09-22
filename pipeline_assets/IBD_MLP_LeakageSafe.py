@@ -545,9 +545,16 @@ def _search_best_params(X_train: pd.DataFrame, y_train: pd.Series, groups_train:
     return model, params, float(np.mean(fold_scores)) if fold_scores else float("nan")
 
 
+def _composition_frame(combined: pd.DataFrame, prefix: str) -> pd.DataFrame:
+    columns = [c for c in combined.columns if str(c).startswith(prefix)]
+    if not columns:
+        raise ValueError(f"No composition columns found with prefix {prefix!r}")
+    return combined.loc[:, columns].copy()
+
+
 def _prepare_patient_frames(feature_input_dir: Path, source_output_dir: Path):
     combined = pd.read_parquet(feature_input_dir / "combined_features_filtered.parquet")
-    nmf_props = combined.loc[:, [c for c in combined.columns if str(c).startswith("nmf_prop_")]].copy()
+    nmf_props = _composition_frame(combined, composition_prefix)
     y = pd.read_parquet(feature_input_dir / "targets_y.parquet").squeeze().astype(str)
     groups = pd.read_parquet(feature_input_dir / "groups.parquet").squeeze().astype(str)
 
@@ -570,7 +577,7 @@ def _prepare_patient_frames(feature_input_dir: Path, source_output_dir: Path):
 def _prepare_fov_frames(feature_input_dir: Path, source_output_dir: Path):
     combined = pd.read_parquet(feature_input_dir / "combined_features_filtered.parquet")
     combined.index = combined.index.astype(str)
-    nmf_props = combined.loc[:, [c for c in combined.columns if str(c).startswith("nmf_prop_")]].copy()
+    nmf_props = _composition_frame(combined, composition_prefix)
     y = pd.read_parquet(feature_input_dir / "targets_y.parquet").squeeze().astype(str)
     groups = pd.read_parquet(feature_input_dir / "groups.parquet").squeeze().astype(str)
     y.index = y.index.astype(str)
@@ -595,6 +602,9 @@ feature_input_dir = Path(
 )
 source_output_dir = Path(os.environ.get("NICHERUNNER_SOURCE_OUTPUT_DIR", str(feature_input_dir)))
 mlp_unit = os.environ.get("NICHERUNNER_MLP_UNIT", "patient").strip().lower()
+composition_prefix = os.environ.get("NICHERUNNER_COMPOSITION_PREFIX", "nmf_prop_").strip()
+if not composition_prefix:
+    raise ValueError("NICHERUNNER_COMPOSITION_PREFIX must not be empty")
 output_dir = Path(os.environ.get("NICHERUNNER_MLP_OUTPUT_DIR", str(feature_input_dir / "MLP_LeakageSafe")))
 os.makedirs(output_dir, exist_ok=True)
 output_path = output_dir / "mlp_results.txt"
@@ -636,6 +646,7 @@ sys.stdout = open(output_path, "w", encoding="utf-8")
 try:
     print("--- Starting Leakage-Safe Nested Grouped Evaluation ---")
     print(f"Evaluation unit: {mlp_unit}")
+    print(f"Composition prefix: {composition_prefix}")
     print("Outer CV mode: logo_grouped")
     print("Inner CV mode: nested training-only tuning with grouped splits")
     print(f"Skip SHAP: {skip_shap}")

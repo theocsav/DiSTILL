@@ -55,13 +55,14 @@ A selected adapter must freeze the exact feature-column index, target values,
 and patient-group index from this audit. It must join calibrated NOVAE labels
 by preserved `obs`/`unique_cell_id`, never by retiling or reconstructing FOVs.
 
-## Current operational status
+## Final validated status
 
-The first attempted real audit was inconclusive because the NOVAE conda
-environment lacked a parquet engine; the launcher now defaults to the
-parquet-capable downstream `ibd_cosmx_k4` environment. Real rerun job 42944894
-completed the other checks, but found enrichment missing 14 historical and 18
-full-sweep canonical FOVs. Every missing FOV had exactly one observation and
-niche-gene coverage was complete, providing evidence for the narrowly defined
-structural-zero exception above. A corrected rerun is still required; no
-candidate is selected until it passes the updated audit.
+Validated audit job **43008275**, commit **b8218ba**, completed `0:0 1:47`,
+with output `/blue/kejun.huang/vasco.hinostroza/nicherunner/src/sptx-tool/runs/novae_downstream_contract_audit/validated_rerun/audit`.
+Both eligible contracts passed independently: historical canonical164 (61
+healthy/103 SSc, 14 patients, 14 singleton structural-zero enrichment FOVs)
+and fullsweep225 (89 healthy/136 SSc, 14 patients, 18 singleton
+structural-zero enrichment FOVs); their canonical intersection is 134. The
+predeclared policy selects **historical_164**, never performance. The next
+stage is documented in `docs/NOVAE_RES1_FOV_FEATURE_CONTRACT.md` and is built
+by the standalone CPU adapter/launcher; no real H5AD is read locally.
