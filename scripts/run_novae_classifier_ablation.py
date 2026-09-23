@@ -20,13 +20,16 @@ import time
 from pathlib import Path
 from typing import Any
 
+REPO = Path(__file__).resolve().parents[1]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
 import numpy as np
 import pandas as pd
 from sklearn.metrics import confusion_matrix
 
 from scripts import run_novae_nmf_comparison as primary
 
-REPO = Path(__file__).resolve().parents[1]
 EVALUATOR = primary.EVALUATOR
 LAUNCHER = REPO / "scripts" / "submit_novae_classifier_ablation.sh"
 ABLATIONS: dict[str, tuple[int, int]] = {

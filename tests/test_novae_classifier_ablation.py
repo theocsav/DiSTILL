@@ -3,11 +3,19 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from scripts import run_novae_classifier_ablation as ablation
+
+
+def test_direct_cli_bootstrap_help_from_repo_root() -> None:
+    root = Path(__file__).parents[1]
+    result = subprocess.run([sys.executable, "scripts/run_novae_classifier_ablation.py", "--help"], cwd=root, capture_output=True, text=True)
+    assert result.returncode == 0
+    assert "--full-primary-dir" in result.stdout
 
 
 def test_predeclared_configuration_matrix_and_exact_environment() -> None:
