@@ -24,7 +24,9 @@ canonical input file hashes are H5AD
 `post_nmf_obs.csv`
 `a79a4e5949752110593f45eccd1ff34786b7d39cea3ce144b635444638bb354b`.
 
-Run only through SLURM (2 CPU, 96 GB, GPU disabled):
+Run only through SLURM (2 CPU, 96 GB, GPU disabled). The launcher defaults to
+`/blue/kejun.huang/vasco.hinostroza/nicherunner/conda/envs/ibd_cosmx_k4`, the
+production-validated CPU environment with parquet support:
 
 ```bash
 scripts/submit_novae_spatial_biological_validation.sh --render-only

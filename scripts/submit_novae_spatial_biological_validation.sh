@@ -11,7 +11,7 @@ RUN_ROOT="${NOVAE_SPATIAL_RUN_ROOT:-${REPO_DIR}/runs/novae_spatial_biological_va
 OUTPUT="${NOVAE_SPATIAL_OUTPUT_DIR:-${RUN_ROOT}/validation}"
 JOB="${NOVAE_SPATIAL_JOB_SCRIPT:-${RUN_ROOT}/submit_novae_spatial_biological_validation.sbatch}"
 LOG="${NOVAE_SPATIAL_LOG_DIR:-${RUN_ROOT}/logs}"
-ENV_PATH="${NOVAE_SPATIAL_CONDA_ENV:-/blue/kejun.huang/vasco.hinostroza/nicherunner/conda/envs/novae_pilot_py312}"
+ENV_PATH="${NOVAE_SPATIAL_CONDA_ENV:-/blue/kejun.huang/vasco.hinostroza/nicherunner/conda/envs/ibd_cosmx_k4}"
 ACCOUNT="${NOVAE_ACCOUNT:-kejun.huang}"; QOS="${NOVAE_QOS:-kejun.huang}"; PARTITION="${NOVAE_PARTITION:-}"
 TIME="${NOVAE_SPATIAL_TIME:-48:00:00}"; NAME="${NOVAE_SPATIAL_JOB_NAME:-novae_spatial_validation}"
 safe_path() { [[ -n "$2" && "$2" != *$'\n'* && "$2" != *$'\r'* && "$2" =~ ^[A-Za-z0-9._:/-]+$ ]] || { echo "$1 contains unsafe path characters" >&2; exit 2; }; }

@@ -151,5 +151,6 @@ def test_launcher_render_conflict_guard(tmp_path: Path) -> None:
     subprocess.run(["bash", str(root / "scripts/submit_novae_spatial_biological_validation.sh"), "--render-only"], env=env, check=True)
     text = (tmp_path / "run" / "job.sbatch").read_text()
     assert "#SBATCH --cpus-per-task=2" in text and "#SBATCH --mem=96gb" in text and 'CUDA_VISIBLE_DEVICES=""' in text
+    assert "ibd_cosmx_k4" in text and "conda activate" in text
     bad = {**env, "NOVAE_SPATIAL_JOB_NAME": "bad name"}
     assert subprocess.run(["bash", str(root / "scripts/submit_novae_spatial_biological_validation.sh"), "--render-only"], env=bad, capture_output=True).returncode == 2
