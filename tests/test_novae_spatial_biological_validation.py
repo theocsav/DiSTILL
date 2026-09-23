@@ -12,7 +12,7 @@ from scripts import run_novae_spatial_biological_validation as validation
 
 
 class FakeAnnData:
-    def __init__(self, *, omit_post_patient: bool = False, omit_l8: bool = False) -> None:
+    def __init__(self, *, omit_post_patient: bool = False, omit_l8: bool = False, omit_counts: bool = False, invalid_counts: bool = False) -> None:
         n = 19
         ids = [f"cell_{i}" for i in range(n)]
         domains = [f"L{i}" for i in range(9)] + [f"L{i % 8}" for i in range(9)] + [""]
@@ -23,8 +23,12 @@ class FakeAnnData:
         self.n_obs = n
         self.obsm = {"spatial": np.arange(n * 2, dtype=float).reshape(n, 2)}
         self.obsp = {validation.GRAPH_KEY: sparse.block_diag((sparse.diags([np.ones(9), np.ones(9)], [-1, 1], shape=(10, 10)), sparse.diags([np.ones(8), np.ones(8)], [-1, 1], shape=(9, 9))), format="csr")}
-        self.X = np.arange(1, n * 3 + 1, dtype=float).reshape(n, 3)
+        self.X = np.arange(1, n * 3 + 1, dtype=float).reshape(n, 3) + 0.25  # transformed post-inference matrix
         self.var_names = pd.Index(["g0", "g1", "g2"])
+        counts = np.arange(1, n * 3 + 1, dtype=np.int32).reshape(n, 3)
+        if invalid_counts:
+            counts = counts.astype(float); counts[0, 0] = np.nan
+        self.layers = {} if omit_counts else {"counts": counts}
         self.uns = {"novae_pilot_provenance": {"analysis_scope": "exploratory", "reference": "all", "dataset_id": "skin_visium_ssc_paired_cpu_calibrated", "coordinate_strategy": "visium_explicit_scale", "domain_key": validation.DOMAIN_KEY, "neighborhood_valid_key": validation.VALID_KEY, "primary_resolution": 1.0, "accelerator": "cpu", "device": "cpu", "workers": 0, "seed": 42, "input_sha256": validation.EXPECTED_NOVAE_INPUT_SHA256, "checkpoint_sha256": validation.EXPECTED_NOVAE_CHECKPOINT_SHA256, "deterministic_policy": {"requested": True, "effective": True}}}
         self.omit_post_patient = omit_post_patient
 
@@ -103,7 +107,14 @@ def test_run_validation_contract_failures_and_atomic_cleanup(tmp_path: Path, mon
     assert (output / "selected_hvgs.csv").is_file()
     assert (output / "unweighted_per_slide_summary.parquet").is_file()
 
+    for bad_counts, message in ((FakeAnnData(omit_counts=True), r"layers\['counts'\] is required"), (FakeAnnData(invalid_counts=True), r"layers\['counts'\] must contain")):
+        monkeypatch.setattr(validation, "_load_anndata", lambda _, bad_counts=bad_counts: bad_counts)
+        bad_counts.post_frame().to_csv(post, index=False)
+        with pytest.raises(validation.ContractError, match=message):
+            validation.run_validation(h5ad, post, tmp_path / f"bad_counts_{message[:3]}", **{**kwargs, "expected_post_sha256": validation.sha256(post)})
+
     missing = FakeAnnData(omit_post_patient=True); missing.post_frame().to_csv(post, index=False)
+    monkeypatch.setattr(validation, "_load_anndata", lambda _: missing)
     with pytest.raises(validation.ContractError, match="post_nmf_obs patient"):
         validation.run_validation(h5ad, post, tmp_path / "missing_metadata", **{**kwargs, "expected_post_sha256": validation.sha256(post)})
 

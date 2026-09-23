@@ -12,8 +12,11 @@ labels/factors from historical `post_nmf_obs.csv`. The NOVAE contract requires
 `reference=all`, the calibrated input/checkpoint hashes, `domain_key=
 novae_domains_res1.0`, and valid labels `L0` through `L8`. The analysis uses
 only NOVAE-valid rows as one shared complete case (13,372 expected valid and 45
-invalid); invalid rows are disclosed and never imputed. Coordinates, raw counts,
-and the induced undirected `spatial_connectivities` graph are identical between
+invalid); invalid rows are disclosed and never imputed. Expression always
+comes from the preserved integer raw-count layer `adata.layers['counts']`, never
+post-inference/transformed `adata.X`; shape and finite/nonnegative/integer
+contracts are enforced. Coordinates, raw counts, and the induced undirected
+`spatial_connectivities` graph are identical between
 arms. Non-finite values, duplicate/missing IDs, asymmetric or cross-slide edges,
 wrong K, metadata disagreement, and provenance failures stop the run. The
 canonical input file hashes are H5AD

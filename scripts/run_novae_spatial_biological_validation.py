@@ -136,15 +136,21 @@ def _finite_coords(adata: Any) -> np.ndarray:
 
 
 def _raw_counts(adata: Any) -> Any:
-    matrix = adata.X
+    layers = getattr(adata, "layers", None)
+    if layers is None or "counts" not in layers:
+        raise ContractError("layers['counts'] is required as the preserved raw-count expression source")
+    matrix = layers["counts"]
+    expected_shape = (int(adata.n_obs), int(len(adata.var_names)))
+    if getattr(matrix, "shape", None) != expected_shape:
+        raise ContractError("layers['counts'] shape is not aligned to observations and variables")
     values = matrix.data if sparse.issparse(matrix) else np.asarray(matrix)
     try:
         if not np.isfinite(values).all() or (values < 0).any() or not np.allclose(values, np.rint(values), atol=1e-8, rtol=0):
-            raise ContractError("X must contain finite nonnegative integer raw counts")
+            raise ContractError("layers['counts'] must contain finite nonnegative integer raw counts")
     except TypeError as exc:
-        raise ContractError("X must be numeric raw counts") from exc
+        raise ContractError("layers['counts'] must be numeric raw counts") from exc
     if getattr(matrix, "ndim", 2) != 2:
-        raise ContractError("X must be two-dimensional")
+        raise ContractError("layers['counts'] must be two-dimensional")
     return matrix
 
 
@@ -421,6 +427,13 @@ def validate_provenance(uns: Mapping[str, Any], *, expected_hashes: Mapping[str,
     boolean_type = (bool, np.bool_)
     if not isinstance(requested, boolean_type) or not isinstance(effective, boolean_type) or not bool(requested) or not bool(effective):
         raise ContractError("NOVAE provenance deterministic policy is not effective")
+    if "expression_mode" in payload and payload["expression_mode"] != "raw_counts":
+        raise ContractError("NOVAE provenance expression_mode is not raw_counts")
+    audit = payload.get("expression_audit_after")
+    if isinstance(audit, Mapping):
+        for key in ("counts_layer_present", "counts_layer_preserved"):
+            if key in audit and audit[key] is not True and not (isinstance(audit[key], np.bool_) and bool(audit[key])):
+                raise ContractError(f"NOVAE provenance {key} is not true")
     if expected_hashes:
         hashes = payload.get("hashes", payload.get("input_hashes", {}))
         for key, expected in expected_hashes.items():
@@ -540,10 +553,10 @@ def run_validation(novae_h5ad: str | Path, post_nmf_obs: str | Path, output_dir:
             arm_summaries[arm]["weighted_slide_mean_within_domain_edge_fraction_descriptive"] = weighted_within
             arm_summaries[arm]["weighted_slide_mean_within_edge_fraction"] = weighted_within
             arm_summaries[arm]["slide_count"] = int(len(arm_rows))
-        summary = {"contract": {"K": 9, "valid_rows": len(order), "invalid_rows": int((~valid_all).sum()), "graph": GRAPH_KEY, "complete_case": True, "no_imputation": True, "seed": seed, "permutations": permutations}, "arms": arm_summaries, "confounding": {arm: confounding_metrics(labels, shared_patients) for arm, labels in arms.items()}, "coverage": coverage}
+        summary = {"contract": {"K": 9, "valid_rows": len(order), "invalid_rows": int((~valid_all).sum()), "graph": GRAPH_KEY, "complete_case": True, "no_imputation": True, "expression_source": "layers['counts']", "seed": seed, "permutations": permutations}, "arms": arm_summaries, "confounding": {arm: confounding_metrics(labels, shared_patients) for arm, labels in arms.items()}, "coverage": coverage}
         confounds = pd.DataFrame([{"arm": arm, **confounding_metrics(labels, shared_patients)} for arm, labels in arms.items()])
         summary_csv = pd.DataFrame([{"arm": arm, **values} for arm, values in arm_summaries.items()])
-        graph_contract = {"graph_key": GRAPH_KEY, "topology": "identical induced undirected graph for both arms", "nodes": len(order), "undirected_edges": len(_undirected_edges(shared_graph)[0]), "cross_slide_edges": 0, "coordinates": "identical shared x/y", "expression": "identical shared raw-count matrix", "zero_degree_spots": int((np.diff(shared_graph.indptr) == 0).sum())}
+        graph_contract = {"graph_key": GRAPH_KEY, "topology": "identical induced undirected graph for both arms", "nodes": len(order), "undirected_edges": len(_undirected_edges(shared_graph)[0]), "cross_slide_edges": 0, "coordinates": "identical shared x/y", "expression": "identical shared raw-count matrix", "expression_source": "layers['counts']", "zero_degree_spots": int((np.diff(shared_graph.indptr) == 0).sum())}
         _atomic_table(coverage_table, stage / "shared_observation_graph_contract.parquet"); _atomic_json(graph_contract, stage / "graph_contract.json"); _atomic_table(spatial, stage / "spatial_metrics_per_slide.parquet"); _atomic_table(slide_summary, stage / "unweighted_per_slide_summary.parquet"); _atomic_table(frag, stage / "fragmentation_per_slide_domain.parquet"); _atomic_table(nulls, stage / "permutation_nulls.parquet"); _atomic_table(pd.concat(expression_frames, ignore_index=True), stage / "expression_silhouette.parquet"); _atomic_table(pd.concat(signature_frames, ignore_index=True), stage / "patient_logo_signatures.parquet"); _atomic_table(prevalence, stage / "coverage_prevalence.parquet"); _atomic_table(confounds, stage / "confounding_metrics.parquet"); _atomic_json(summary, stage / "method_summary.json"); _atomic_table(summary_csv, stage / "method_summary.csv")
         _atomic_json({"cell_type_coherence": {"status": "blocked", "reason": "NMF derives from cell2location/dominant type; circular without independent annotations"}, "pathway_histology": {"status": "blocked", "reason": "not available"}, "seed_stability": {"status": "blocked", "reason": "no comparable NMF reruns"}}, stage / "blocked_status.json")
         var_names = np.asarray([str(value) for value in adata.var_names])
@@ -551,7 +564,7 @@ def run_validation(novae_h5ad: str | Path, post_nmf_obs: str | Path, output_dir:
         _atomic_table(marker_table, stage / "top_marker_signature_genes.csv")
         hvg_table = pd.DataFrame({"rank": np.arange(1, len(selected_genes) + 1), "gene": [var_names[int(gene)] for gene in selected_genes], "feature_index": [int(gene) for gene in selected_genes], "selection": "label-free top variance of shared log-normalized expression"})
         _atomic_table(hvg_table, stage / "selected_hvgs.csv")
-        manifest = {"contract": "novae_spatial_biological_validation", "inputs": {"novae_h5ad": {"path": str(h5ad), "sha256": h5ad_sha256}, "post_nmf_obs": {"path": str(post), "sha256": post_sha256}}, "outputs": {p.name: sha256(p) for p in sorted(stage.iterdir()) if p.is_file()}, "caveats": ["descriptive/exploratory; cohort-derived labels", "disease labels never used", "no naive FOV p-values"], "code_sha256": sha256(Path(__file__))}
+        manifest = {"contract": "novae_spatial_biological_validation", "expression_source": "layers['counts']", "inputs": {"novae_h5ad": {"path": str(h5ad), "sha256": h5ad_sha256}, "post_nmf_obs": {"path": str(post), "sha256": post_sha256}}, "outputs": {p.name: sha256(p) for p in sorted(stage.iterdir()) if p.is_file()}, "caveats": ["descriptive/exploratory; cohort-derived labels", "disease labels never used", "no naive FOV p-values"], "code_sha256": sha256(Path(__file__))}
         _atomic_json(manifest, stage / "manifest.json")
         output.parent.mkdir(parents=True, exist_ok=True); os.replace(stage, output)
     except Exception:
