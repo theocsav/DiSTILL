@@ -76,6 +76,8 @@ def test_fragmentation_and_permutation_are_deterministic() -> None:
 def test_provenance_requires_calibrated_hash_and_reference() -> None:
     good = {"analysis_scope": "exploratory", "reference": "all", "dataset_id": "skin_visium_ssc_paired_cpu_calibrated", "coordinate_strategy": "visium_explicit_scale", "domain_key": validation.DOMAIN_KEY, "neighborhood_valid_key": validation.VALID_KEY, "primary_resolution": 1.0, "accelerator": "cpu", "device": "cpu", "workers": 0, "seed": 42, "input_sha256": validation.EXPECTED_NOVAE_INPUT_SHA256, "checkpoint_sha256": validation.EXPECTED_NOVAE_CHECKPOINT_SHA256, "deterministic_policy": {"requested": True, "effective": True}}
     validation.validate_provenance(good)
+    numpy_bool = {**good, "deterministic_policy": {"requested": np.bool_(True), "effective": np.bool_(True)}}
+    validation.validate_provenance(numpy_bool)
     with pytest.raises(validation.ContractError, match="reference"):
         validation.validate_provenance({**good, "reference": "train"})
     with pytest.raises(validation.ContractError, match="hash"):

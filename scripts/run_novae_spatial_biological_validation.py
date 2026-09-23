@@ -416,7 +416,10 @@ def validate_provenance(uns: Mapping[str, Any], *, expected_hashes: Mapping[str,
     if input_hash != EXPECTED_NOVAE_INPUT_SHA256 or checkpoint_hash != EXPECTED_NOVAE_CHECKPOINT_SHA256:
         raise ContractError("NOVAE provenance input/checkpoint hash does not match the calibrated contract")
     policy = payload.get("deterministic_policy", {})
-    if not isinstance(policy, Mapping) or policy.get("requested") is not True or policy.get("effective") is not True:
+    requested = policy.get("requested") if isinstance(policy, Mapping) else None
+    effective = policy.get("effective") if isinstance(policy, Mapping) else None
+    boolean_type = (bool, np.bool_)
+    if not isinstance(requested, boolean_type) or not isinstance(effective, boolean_type) or not bool(requested) or not bool(effective):
         raise ContractError("NOVAE provenance deterministic policy is not effective")
     if expected_hashes:
         hashes = payload.get("hashes", payload.get("input_hashes", {}))
