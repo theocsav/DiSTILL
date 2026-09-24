@@ -100,3 +100,32 @@ Synthetic tests cover orientation, one-versus-zero and balanced discordances,
 zero discordances, input hash/alignment/duplicate failures, atomic no-overwrite
 behavior, CLI bootstrap, and launcher rendering. No real data is required
 locally to run those tests.
+
+## Completed result
+
+The HPG run completed successfully:
+
+- Job: `43240839`
+- Commit: `2b6159c`
+- Exit status: `0`
+- Runtime: `10s`
+- Published output: `/blue/.../runs/novae_patient_level_mcnemar_20260924T214814Z_286673/historical164_patient_level_mcnemar`
+- Input/output hashes were verified.
+
+For the predeclared primary comparison (`full`, `primary_mean`), the exact
+patient-level table had `n=14`: both correct `10`, both wrong `3`, NMF-only
+correct `0`, and NOVAE-only correct `1`. Thus, there was one discordant pair.
+The exact two-sided McNemar test uses the exact binomial distribution for the
+NMF-only count conditional on the one discordant pair, with null direction
+probability 0.5; its p-value was `1.0`. All full-pooling sensitivity methods
+returned the same table and p-value.
+
+All secondary exact p-values were `1.0`. These sensitivity results are
+multiplicity-unadjusted and descriptive. The analysis provides no evidence of a
+difference between NMF and NOVAE, but it does not establish equivalence; the
+single discordant pair is too few to support a precise conclusion.
+
+Professor-ready sentence: “Across 14 paired held-out patients, NMF and NOVAE
+were both correct in 10 cases and both wrong in 3, with only 1 discordant case;
+the exact two-sided McNemar test was not significant (p=1.0), so these data show
+no evidence of a difference, but are too sparse to establish equivalence.”
