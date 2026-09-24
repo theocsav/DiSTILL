@@ -85,3 +85,27 @@ python scripts/run_novae_patient_level_pooling.py \
   --ablation-root /blue/.../historical164_classifier_ablation \
   --output-root /blue/.../runs/novae_patient_level_pooling_<timestamp>/historical164_patient_level_pooling
 ```
+
+## Completed run: HPG job 43203157
+
+- **Run:** commit `3b53833`; exit `0`; runtime `11 s`.
+- **Output:** `/blue/.../runs/novae_patient_level_pooling_20260924T161344Z_3258476/historical164_patient_level_pooling`.
+  Output hashes were verified.
+- **Primary mean patient results (n=14):** full NMF accuracy `0.7142857`, balanced
+  accuracy `0.65`, macro-F1 `0.65`, confusion `TN=2 FP=2 FN=2 TP=8`; full NOVAE
+  accuracy `0.7857143`, balanced accuracy `0.70`, macro-F1 `0.7142857`, confusion
+  `TN=2 FP=2 FN=1 TP=9`. All three pooling methods were identical for the full
+  configuration. NOVAE correctly classified SSc-HL33; both arms shared the
+  remaining errors, HC01, HC03, and SSc5380. No p-value was computed.
+- **Primary ablation balanced accuracy:** composition-only `0.40` for both arms;
+  composition+enrichment NMF `0.40` and NOVAE `0.525`; composition+niche `0.65`
+  for both arms.
+- **Sensitivity:** composition+niche was `0.70` for both arms under both median
+  and majority pooling. The enrichment advantage was not stable across
+  sensitivities; these results are reported without cherry-picking.
+
+Patient pooling reverses the descriptive full-FOV ranking because equal patient
+endpoint weighting and smoothing change the summary, but the difference is one
+patient among `n=14` and does not justify claiming superiority or replacing NMF.
+The model was still trained at FOV level, and NOVAE remains exploratory
+(`reference=all`).
