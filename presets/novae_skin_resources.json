@@ -1,0 +1,17 @@
+{
+  "hallmark_human_2025.1": {
+    "file": "h.all.v2025.1.Hs.symbols.gmt",
+    "url": "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2025.1.Hs/h.all.v2025.1.Hs.symbols.gmt",
+    "sha256": "f22066af72e215ccb7b89d88e492c07e1eef17534c2ca7b0f9902cfecbbdd8e9",
+    "source": "Broad Institute MSigDB 2025.1.Hs public release",
+    "license": "CC BY 4.0",
+    "license_url": "https://gsea-msigdb.org/gsea/msigdb_license_terms.jsp",
+    "copyright": "Broad Institute, Massachusetts Institute of Technology, and The Regents of the University of California, 2004-2025"
+  },
+  "skin_marker_programs": {
+    "file": "novae_skin_marker_programs.csv",
+    "sha256": "402af0d62aca43a5b90d3ac4b0443b54b3dc6c6b8c7e538a72dd9871a90317f2",
+    "sources": ["Ganier PMC10786309", "Chen PMC11090198", "Apostolidis PMC6174292"],
+    "license": "Researcher-curated gene programs; source IDs retained in each row"
+  }
+}
