@@ -229,6 +229,19 @@ def score_programs(aggregated: pd.DataFrame, programs: pd.DataFrame | str | Path
     return out
 
 
+def top_program_candidates(scores: pd.DataFrame, *, coverage_gate: float = PROGRAM_COVERAGE_GATE, top_n: int = PROGRAM_TOP_N) -> pd.DataFrame:
+    """Select only positive fixed-program candidates under the predeclared gate."""
+    required = {"arm", "domain", "coverage", "score"}
+    if not required.issubset(scores.columns): raise ContractError("program score table missing candidate columns")
+    selected = scores[(scores.coverage >= coverage_gate) & scores.score.notna() & (scores.score > 0)].copy()
+    if selected.empty:
+        selected["candidate_rank"] = pd.Series(dtype=int)
+        return selected
+    selected = selected.sort_values(["arm", "domain", "score", "coverage", "program"], ascending=[True, True, False, False, True], kind="mergesort")
+    selected["candidate_rank"] = selected.groupby(["arm", "domain"], sort=False).cumcount() + 1
+    return selected[selected.candidate_rank <= top_n].reset_index(drop=True)
+
+
 def parse_gmt(path: str | Path) -> dict[str, set[str]]:
     sets: dict[str, set[str]] = {}
     with _resource_path(path).open(encoding="utf-8") as f:
@@ -299,6 +312,28 @@ def hungarian_matching(similarity: pd.DataFrame) -> pd.DataFrame:
     rr, cc = linear_sum_assignment(cost)
     return pd.DataFrame({"nmf_domain": [rows[i] for i in rr], "novae_domain": [cols[j] for j in cc],
                          "spearman": [matrix[i, j] for i, j in zip(rr, cc, strict=True)], "matching": "Hungarian maximum; descriptive only"})
+
+
+def best_signature_matches(similarity: pd.DataFrame) -> pd.DataFrame:
+    """Return non-exclusive deterministic best matches in both directions.
+
+    This intentionally differs from the one-to-one Hungarian assignment: a
+    domain may be the best match for multiple domains in this descriptive view.
+    """
+    required = {"left_domain", "right_domain", "spearman"}
+    if not required.issubset(similarity.columns): raise ContractError("similarity table missing match columns")
+    rows = []
+    for direction, query_col, target_col in (("novae_to_nmf", "right_domain", "left_domain"), ("nmf_to_novae", "left_domain", "right_domain")):
+        for query in sorted(similarity[query_col].astype(str).unique()):
+            candidates = similarity[similarity[query_col].astype(str) == query].copy()
+            candidates["_score"] = candidates.spearman.fillna(-np.inf)
+            candidates = candidates.sort_values(["_score", target_col], ascending=[False, True], kind="mergesort")
+            if candidates.empty: continue
+            best_value = candidates.iloc[0]["spearman"]
+            best = float(best_value) if np.isfinite(best_value) else np.nan
+            ties = candidates[np.isclose(candidates["_score"].to_numpy(float), candidates.iloc[0]["_score"], rtol=0, atol=1e-12)]
+            rows.append({"direction": direction, "query_domain": query, "best_domain": str(candidates.iloc[0][target_col]), "spearman": best, "tie_count": int(len(ties)), "matching": "non-exclusive best from full matrix; distinct from Hungarian"})
+    return pd.DataFrame(rows)
 
 
 def spot_agreement(nmf: Iterable[Any], novae: Iterable[Any], patients: Iterable[Any]) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -394,8 +429,10 @@ patient_aware_signatures = patient_domain_signatures
 aggregate_markers = aggregate_patient_signatures
 compute_patient_aware_markers = top_positive_markers
 compute_program_scores = score_programs
+select_program_candidates = top_program_candidates
 compute_hallmark_ora = hallmark_ora
 deterministic_hungarian = hungarian_matching
+best_matches = best_signature_matches
 exact_prevalence_permutation = exact_prevalence_test
 bootstrap_prevalence = prevalence_bootstrap
 complete_prevalence = complete_patient_prevalence
@@ -421,7 +458,7 @@ def _safe_slide_id(value: Any) -> str:
     return slide
 
 
-def _maps(frame: pd.DataFrame, output: Path, matching: pd.DataFrame) -> list[str]:
+def _maps(frame: pd.DataFrame, output: Path, matching: pd.DataFrame, *, invalid_rows: int = N_INVALID) -> list[str]:
     try:
         import matplotlib.pyplot as plt
         from matplotlib.backends.backend_pdf import PdfPages
@@ -433,16 +470,22 @@ def _maps(frame: pd.DataFrame, output: Path, matching: pd.DataFrame) -> list[str
     output_resolved = output.resolve()
     files = []; figures = []
     colors = {}
+    legend_handles = []
     for i, r in matching.iterrows():
         colors[str(r.nmf_domain)] = i; colors[str(r.novae_domain)] = i
+        from matplotlib.patches import Patch
+        rho = "nan" if not np.isfinite(r.spearman) else f"{r.spearman:.3f}"
+        legend_handles.append(Patch(facecolor=plt.cm.tab10((i + 1) / 9), label=f"NMF {r.nmf_domain} ↔ NOVAE {r.novae_domain} (rho={rho})"))
     for raw_slide, group in groups:
         slide = _safe_slide_id(raw_slide)
         path = (output / f"map_{slide}.png").resolve()
         if output_resolved not in path.parents: raise ContractError("map path escapes output directory")
         fig, axes = plt.subplots(1, 2, figsize=(10, 4), constrained_layout=True)
         for ax, col, title in zip(axes, ["nmf_factor", "novae_domain"], ["NMF exploratory domain", "NOVAE exploratory domain"], strict=True):
-            vals = group[col].astype(str).map(colors).fillna(-1); ax.scatter(group.x, group.y, c=vals, s=5, cmap="tab10", vmin=-1, vmax=8); ax.set_title(title); ax.set_aspect("equal"); ax.set_xlabel("preserved x"); ax.set_ylabel("preserved y")
-        fig.savefig(path, dpi=180); files.append(path.name); figures.append(fig); plt.close(fig)
+            vals = group[col].astype(str).map(colors).fillna(-1); ax.scatter(group.x, group.y, c=vals, s=5, cmap="tab10", vmin=-1, vmax=8); ax.set_title(f"{title} — {slide} ({len(group)} shared valid spots)"); ax.set_aspect("equal"); ax.set_xlabel("preserved x"); ax.set_ylabel("preserved y")
+        fig.suptitle(f"{slide}: {len(group)} shared valid spots | {invalid_rows} invalid NOVAE rows excluded cohort-wide; no imputation", fontsize=9)
+        if legend_handles: fig.legend(handles=legend_handles, loc="lower center", ncol=2, fontsize=7, frameon=True, bbox_to_anchor=(0.5, -0.04))
+        fig.savefig(path, dpi=180, bbox_inches="tight"); files.append(path.name); figures.append(fig); plt.close(fig)
         if not path.is_file() or path.stat().st_size == 0: raise ContractError(f"empty map output: {path}")
     if figures:
         pdf = output / "domain_maps.pdf"
@@ -545,8 +588,8 @@ def run_interpretation(novae_h5ad: str | Path, post_nmf_obs: str | Path, validat
             sig = patient_domain_signatures(counts[order], labels[order], patients[order], eligible_detected_genes(counts[order]), arm=arm, gene_names=genes)
             agg = aggregate_patient_signatures(sig); all_sigs.append(sig); all_agg.append(agg)
         full = pd.concat(all_sigs, ignore_index=True); agg = pd.concat(all_agg, ignore_index=True); top = top_positive_markers(agg)
-        programs = score_programs(agg); top_programs = programs[(programs.coverage >= PROGRAM_COVERAGE_GATE) & programs.score.notna()].copy(); top_programs["candidate_rank"] = top_programs.groupby(["arm", "domain"], sort=False).cumcount() + 1; top_programs = top_programs[top_programs.candidate_rank <= PROGRAM_TOP_N]; ora = hallmark_ora(top, [genes[i] for i in eligible_detected_genes(counts[order])])
-        nmf_agg, novae_agg = agg[agg.arm == "nmf"], agg[agg.arm == "novae"]; sim = signature_similarity(nmf_agg, novae_agg); matching = hungarian_matching(sim)
+        programs = score_programs(agg); top_programs = top_program_candidates(programs); ora = hallmark_ora(top, [genes[i] for i in eligible_detected_genes(counts[order])])
+        nmf_agg, novae_agg = agg[agg.arm == "nmf"], agg[agg.arm == "novae"]; sim = signature_similarity(nmf_agg, novae_agg); matching = hungarian_matching(sim); best_matches = best_signature_matches(sim)
         contingency, agreement = spot_agreement(nmf[order], novae[order], patients[order]); overlap = matched_overlap(nmf[order], novae[order], patients[order], matching)
         coverage = pd.DataFrame({"patient": patients[order], "disease": disease[order], "nmf_factor": nmf[order], "novae_domain": novae[order]})
         prevalence = complete_patient_prevalence(coverage)
@@ -558,9 +601,9 @@ def run_interpretation(novae_h5ad: str | Path, post_nmf_obs: str | Path, validat
         prevalence_summary = prevalence.groupby(["arm", "domain", "disease"], as_index=False)["proportion"].mean().rename(columns={"proportion": "mean_patient_proportion"})
         stability = stability_summary(prior_logo)
         observations = pd.DataFrame({"unique_cell_id": ids[order], "slide": slides[order], "patient": patients[order], "disease": disease[order], "x": spatial_numeric[order, 0], "y": spatial_numeric[order, 1], "nmf_factor": nmf[order], "novae_domain": novae[order], "novae_valid": True})
-        for frame, name in ((observations, "shared_observations.parquet"), (prevalence, "patient_domain_prevalence.parquet"), (full, "patient_aware_markers_full.parquet"), (agg, "patient_aware_markers_aggregated.parquet"), (top, "patient_aware_markers_top100.csv"), (programs, "fixed_program_scores.csv"), (top_programs, "fixed_program_top_candidates.csv"), (ora, "hallmark_ora.csv"), (sim, "nmf_novae_similarity.csv"), (matching, "nmf_novae_matching.csv"), (contingency, "spot_contingency.csv"), (agreement, "spot_agreement.csv"), (overlap, "matched_overlap.csv"), (prev_tests, "exact_prevalence_tests.csv"), (prev_ci, "prevalence_bootstrap_ci.csv"), (prevalence_summary, "disease_prevalence_summary.csv"), (stability, "patient_logo_stability_summary.csv")):
+        for frame, name in ((observations, "shared_observations.parquet"), (prevalence, "patient_domain_prevalence.parquet"), (full, "patient_aware_markers_full.parquet"), (agg, "patient_aware_markers_aggregated.parquet"), (top, "patient_aware_markers_top100.csv"), (programs, "fixed_program_scores.csv"), (top_programs, "fixed_program_top_candidates.csv"), (ora, "hallmark_ora.csv"), (sim, "nmf_novae_similarity.csv"), (matching, "nmf_novae_matching.csv"), (best_matches, "best_signature_matches.csv"), (contingency, "spot_contingency.csv"), (agreement, "spot_agreement.csv"), (overlap, "matched_overlap.csv"), (prev_tests, "exact_prevalence_tests.csv"), (prev_ci, "prevalence_bootstrap_ci.csv"), (prevalence_summary, "disease_prevalence_summary.csv"), (stability, "patient_logo_stability_summary.csv")):
             _atomic_table(frame, stage / name)
-        map_files = _maps(observations, stage, matching)
+        map_files = _maps(observations, stage, matching, invalid_rows=int((~valid).sum()))
         h1, p1 = sha256(h5ad), sha256(post)
         if h1 != h0 or p1 != p0: raise ContractError("input changed while interpretation was running")
         if any(sha256(validation_dir / name) != digest for name, digest in prior_artifact_hashes.items()) or sha256(validation_manifest) != validation_manifest_hash: raise ContractError("prior validation artifact changed while interpretation was running")
@@ -574,7 +617,7 @@ def run_interpretation(novae_h5ad: str | Path, post_nmf_obs: str | Path, validat
         resource_info = json.loads(resource_manifest.read_text(encoding="utf-8"))
         hallmark_info = resource_info.get("hallmark_human_2025.1", {})
         if hallmark_info.get("sha256") != HALLMARK_SHA256 or hallmark_info.get("url") != "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2025.1.Hs/h.all.v2025.1.Hs.symbols.gmt" or hallmark_info.get("source") != "Broad Institute MSigDB 2025.1.Hs public release" or hallmark_info.get("license") != "CC BY 4.0" or hallmark_info.get("license_url") != "https://gsea-msigdb.org/gsea/msigdb_license_terms.jsp" or resource_info.get("skin_marker_programs", {}).get("file") != Path(PROGRAM_RESOURCE).name or resource_info.get("skin_marker_programs", {}).get("sha256") != PROGRAM_SHA256: raise ContractError("resource manifest attribution/checksum mismatch")
-        summary = {"contract": "novae_skin_domain_interpretation", "status": "exploratory", "K": 9, "valid_rows": int(valid.sum()), "invalid_rows": int((~valid).sum()), "patients": int(len(set(patients))), "disease_used_for_marker_selection": False, "raw_expression_source": "layers['counts']", "no_imputation": True, "prior_validation_manifest": str(validation_manifest), "maps": map_files, "global_agreement": agreement.loc[agreement.group == "global"].to_dict("records"), "matched_similarity_summary": matching[["nmf_domain", "novae_domain", "spearman"]].to_dict("records"), "hallmark_q_lt_0_05_count": int((ora.q_value < 0.05).sum()) if not ora.empty else 0, "prevalence_effect_domains": prev_tests[["arm", "domain", "observed_effect_ssc_minus_healthy"]].to_dict("records"), "blocked_status": {"automatic_cell_type_labels": "blocked", "confirmatory_claims": "blocked", "histology_overlay": "blocked"}, "circularity": ["NMF factors and NOVAE domains are compared descriptively; marker/program resources do not select domains", "reference=all and cohort-derived domains preclude confirmatory interpretation"], "limitations": ["domain names are not cell-type ground truth", "cohort-derived/reference=all exploratory", "prevalence tests are descriptive and patient-level", "NMF/NOVAE matching is only for descriptive alignment/maps"]}
+        summary = {"contract": "novae_skin_domain_interpretation", "status": "exploratory", "K": 9, "valid_rows": int(valid.sum()), "invalid_rows": int((~valid).sum()), "patients": int(len(set(patients))), "disease_used_for_marker_selection": False, "raw_expression_source": "layers['counts']", "no_imputation": True, "prior_validation_manifest": str(validation_manifest), "maps": map_files, "global_agreement": agreement.loc[agreement.group == "global"].to_dict("records"), "matched_similarity_summary": matching[["nmf_domain", "novae_domain", "spearman"]].to_dict("records"), "best_signature_matches": best_matches.to_dict("records"), "hallmark_q_lt_0_05_count": int((ora.q_value < 0.05).sum()) if not ora.empty else 0, "prevalence_effect_domains": prev_tests[["arm", "domain", "observed_effect_ssc_minus_healthy"]].to_dict("records"), "blocked_status": {"automatic_cell_type_labels": "blocked", "confirmatory_claims": "blocked", "histology_overlay": "blocked"}, "circularity": ["NMF factors and NOVAE domains are compared descriptively; marker/program resources do not select domains", "reference=all and cohort-derived domains preclude confirmatory interpretation"], "limitations": ["domain names are not cell-type ground truth", "cohort-derived/reference=all exploratory", "prevalence tests are descriptive and patient-level", "NMF/NOVAE matching is only for descriptive alignment/maps"]}
         _atomic_json(summary, stage / "machine_summary.json")
         _atomic_table(pd.DataFrame([{"metric": "valid_rows", "value": int(valid.sum())}, {"metric": "invalid_rows", "value": int((~valid).sum())}, {"metric": "patients", "value": int(len(set(patients)))}, {"metric": "marker_selection_disease_blind", "value": True}]), stage / "machine_summary.csv")
         manifest = {"contract": "novae_skin_domain_interpretation", "inputs": {"novae_h5ad": {"path": str(h5ad), "sha256_before": h0, "sha256_after": h1}, "post_nmf_obs": {"path": str(post), "sha256_before": p0, "sha256_after": p1}, "validation_manifest": {"path": str(validation_manifest), "sha256_before": validation_manifest_hash, "sha256_after": sha256(validation_manifest)}, "prior_validation_outputs": prior_artifact_hashes}, "resources": resource_hashes, "outputs": {}, "code_sha256": sha256(Path(__file__))}

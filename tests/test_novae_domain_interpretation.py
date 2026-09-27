@@ -39,6 +39,15 @@ def test_gmt_ora_bh_and_fixed_programs() -> None:
     assert ora.iloc[0].overlap_count == 1 and ora.iloc[0].q_value == ora.iloc[0].p_value
 
 
+def test_positive_program_gate_and_nonexclusive_best_matches() -> None:
+    scores = pd.DataFrame({"arm": ["nmf"] * 3, "domain": ["0"] * 3, "program": ["positive", "negative", "low_coverage"], "coverage": [0.8, 0.9, 0.2], "score": [1.0, -1.0, 4.0]})
+    selected = interpretation.top_program_candidates(scores)
+    assert selected.program.tolist() == ["positive"]
+    sim = pd.DataFrame({"left_domain": ["0", "1"], "right_domain": ["L0", "L0"], "spearman": [0.9, 0.9]})
+    best = interpretation.best_signature_matches(sim)
+    assert set(best.direction) == {"novae_to_nmf", "nmf_to_novae"} and best.loc[best.direction == "novae_to_nmf", "tie_count"].iloc[0] == 2
+
+
 def test_matching_orientation_ties_and_agreement() -> None:
     sim = pd.DataFrame({"left_arm": ["nmf"] * 4, "left_domain": ["0", "0", "1", "1"], "right_arm": ["novae"] * 4, "right_domain": ["L0", "L1", "L0", "L1"], "common_gene_count": [3] * 4, "spearman": [1, 1, 1, 1]})
     first = interpretation.hungarian_matching(sim)

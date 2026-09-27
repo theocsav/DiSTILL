@@ -14,15 +14,15 @@ for patient-level descriptive prevalence. Marker signatures are patient-aware
 pseudobulk CPM contrasts (domain versus same-patient background), with the
 predeclared >=5 in-domain and >=20 background thresholds, label-free >=1%
 detection, >=3-patient aggregation, and deterministic top-100 positive gate.
-Fixed programs are in `presets/novae_skin_marker_programs.csv`; top program candidates are predeclared at >=50% gene coverage (top five per arm/domain). Hallmark Human
+Fixed programs are in `presets/novae_skin_marker_programs.csv`; top program candidates are predeclared as positive-score programs with >=50% gene coverage (top five per arm/domain); negative scores remain only in the full score table. Hallmark Human
 2025.1 is the pinned public GMT and checksum in `presets/`. The resource
 manifest records the source URL and attribution: `https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2025.1.Hs/h.all.v2025.1.Hs.symbols.gmt`.
 
 Outputs include full and aggregated patient-aware markers, top markers, fixed
 program scores and top coverage-gated candidates, exact scipy hypergeometric Hallmark ORA with within-domain BH,
-NMF↔NOVAE Spearman similarity and deterministic Hungarian matching, contingency
+NMF↔NOVAE Spearman similarity, deterministic Hungarian matching, and non-exclusive full-matrix best matches, contingency
 and patient/global ARI/NMI/Jaccard agreement, complete zero-preserving prevalence summaries, exact 4-vs-10 patient prevalence enumeration, seeded 10,000-replicate stratified patient bootstrap intervals,
-prior LOGO stability summaries, maps, manifests, and machine-readable blocked
+prior LOGO stability summaries, `best_signature_matches.csv`, maps with explicit invalid-row/legend disclosures, manifests, and machine-readable blocked
 status/limitations. Matching is descriptive and is used only for map colors;
 it never selects a domain or resolution. No FOV-level p-values or confirmatory
 claims are produced.
