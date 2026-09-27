@@ -91,6 +91,9 @@ def test_maps_require_safe_complete_slide_set(tmp_path: Path) -> None:
     matching = pd.DataFrame({"nmf_domain": ["0"], "novae_domain": ["L0"], "spearman": [1.0]})
     files = interpretation._maps(pd.DataFrame(rows), tmp_path, matching)
     assert len([x for x in files if x.endswith(".png")]) == 14 and (tmp_path / "domain_maps.pdf").stat().st_size > 0
+    from matplotlib.image import imread
+    image = imread(tmp_path / "map_S0.png")
+    assert image.shape[1] / image.shape[0] > 2.0  # wide two-panel layout with reserved legend space
     unsafe = pd.DataFrame(rows); unsafe.loc[0, "slide"] = "../escape"
     with pytest.raises(interpretation.ContractError, match="unsafe"):
         interpretation._maps(unsafe, tmp_path / "unsafe", matching)

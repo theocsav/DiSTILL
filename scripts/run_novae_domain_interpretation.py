@@ -480,12 +480,13 @@ def _maps(frame: pd.DataFrame, output: Path, matching: pd.DataFrame, *, invalid_
         slide = _safe_slide_id(raw_slide)
         path = (output / f"map_{slide}.png").resolve()
         if output_resolved not in path.parents: raise ContractError("map path escapes output directory")
-        fig, axes = plt.subplots(1, 2, figsize=(10, 4), constrained_layout=True)
-        for ax, col, title in zip(axes, ["nmf_factor", "novae_domain"], ["NMF exploratory domain", "NOVAE exploratory domain"], strict=True):
-            vals = group[col].astype(str).map(colors).fillna(-1); ax.scatter(group.x, group.y, c=vals, s=5, cmap="tab10", vmin=-1, vmax=8); ax.set_title(f"{title} — {slide} ({len(group)} shared valid spots)"); ax.set_aspect("equal"); ax.set_xlabel("preserved x"); ax.set_ylabel("preserved y")
-        fig.suptitle(f"{slide}: {len(group)} shared valid spots | {invalid_rows} invalid NOVAE rows excluded cohort-wide; no imputation", fontsize=9)
-        if legend_handles: fig.legend(handles=legend_handles, loc="lower center", ncol=2, fontsize=7, frameon=True, bbox_to_anchor=(0.5, -0.04))
-        fig.savefig(path, dpi=180, bbox_inches="tight"); files.append(path.name); figures.append(fig); plt.close(fig)
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6), constrained_layout=False)
+        for ax, col, title in zip(axes, ["nmf_factor", "novae_domain"], ["NMF exploratory domains", "NOVAE exploratory domains"], strict=True):
+            vals = group[col].astype(str).map(colors).fillna(-1); ax.scatter(group.x, group.y, c=vals, s=5, cmap="tab10", vmin=-1, vmax=8); ax.set_title(title, fontsize=10, pad=8); ax.set_aspect("equal"); ax.set_xlabel("preserved x", fontsize=8); ax.set_ylabel("preserved y", fontsize=8); ax.tick_params(labelsize=7)
+        fig.suptitle(f"{slide}: {len(group)} shared valid spots | {invalid_rows} invalid NOVAE rows excluded cohort-wide; no imputation", fontsize=11, y=0.96)
+        fig.subplots_adjust(left=0.06, right=0.98, top=0.83, bottom=0.27, wspace=0.18)
+        if legend_handles: fig.legend(handles=legend_handles, loc="lower center", ncol=3, fontsize=6, handlelength=1.2, columnspacing=1.0, borderaxespad=0.2, frameon=True, bbox_to_anchor=(0.5, 0.035))
+        fig.savefig(path, dpi=180); files.append(path.name); figures.append(fig); plt.close(fig)
         if not path.is_file() or path.stat().st_size == 0: raise ContractError(f"empty map output: {path}")
     if figures:
         pdf = output / "domain_maps.pdf"
